@@ -1,0 +1,50 @@
+# ===== Global =====
+.DS_Store
+
+# Segredos (só o .env.example vai para o Git)
+.env
+.env.*
+!.env.example
+
+# Documentação gerada (knowledge-architect)
+knowledge/
+
+# ===== Herdado de backend/.gitignore =====
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Cache local do dataset Olist
+data/
+
+# ===== Herdado de frontend/.gitignore =====
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
