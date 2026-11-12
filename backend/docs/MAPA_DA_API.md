@@ -1,7 +1,13 @@
 # Mapa da API
 
-Todas as rotas vivem sob o prefixo `/api/v1` (`API_VERSION` em `src/app/main.py`). Sem
-autenticação hoje — qualquer chamador que alcance o backend pode usar qualquer rota.
+Todas as rotas vivem sob o prefixo `/api/v1` (`API_VERSION` em `src/app/main.py`).
+
+| Grupo | Acesso |
+|---|---|
+| `health`, `auth/login`, `products`, `categories` | público |
+| `auth/me`, `admin/*`, `chat/*` | JWT Bearer de **administrador** (`require_admin`: o papel é lido do banco a cada chamada, não do token) |
+
+Não existe cadastro público: o administrador é criado por `scripts/create_admin.py`.
 
 Em desenvolvimento, `/docs` (Swagger) e `/redoc` ficam disponíveis; em produção
 (`ENV=prod`), os dois e `/openapi.json` são desligados (`settings.is_prod`).
@@ -23,6 +29,8 @@ Faz um `ping` no Mongo a cada chamada; não verifica o motor SQL (DuckDB) nem a 
 ---
 
 ## Chat — perguntar e acompanhar a resposta
+
+Exige `Authorization: Bearer <token>` de administrador (**401** sem token ou token inválido, **403** se não for admin). Cada pergunta pertence a quem a fez: `GET .../events` e `POST .../feedback` de outra pessoa respondem **404**. O `POST /chat/questions` tem limite por administrador (`CHAT_RATE_LIMIT` perguntas a cada `CHAT_RATE_WINDOW_S` segundos; padrão 20 em 600 s) e responde **429** ao estourar. Como o `EventSource` do navegador não envia cabeçalhos, o frontend lê o stream com `fetch` (`frontend/src/lib/sse.ts`).
 
 O fluxo é sempre em dois passos: **POST** dispara a pergunta e devolve na hora um
 `question_id`; **GET** acompanha a execução por streaming (SSE) até a resposta ficar
@@ -139,8 +147,72 @@ usados para gerar um (ver `MemoryService.context_for_golden_record`).
 5. Próxima pergunta da mesma conversa: repita o passo 1 reenviando o mesmo session_id.
 ```
 
+## Auth
+
+### `POST /api/v1/auth/login`
+
+Corpo: `{"email": "...", "password": "..."}`. Resposta 200: `{"access_token": "...", "token_type": "bearer", "user": {id, name, email, role, created_at}}`.
+
+- **401** com a mesma mensagem genérica para e-mail inexistente, senha errada ou usuário que não é admin (sem enumeração de contas; o tempo de resposta é equalizado com um hash descartável).
+- **429** depois de `LOGIN_MAX_FAILURES` falhas por e-mail+IP dentro de `LOGIN_WINDOW_S`.
+- O token é JWT HS256 e expira em `JWT_EXPIRE_MINUTES`. Com `ENV=prod`, `JWT_SECRET` é obrigatório.
+
+### `GET /api/v1/auth/me`
+
+Devolve o usuário do token (admin). **401** sem token.
+
+---
+
+## Produtos — vitrine pública
+
+O dataset Olist não tem nome nem foto de produto: `label` é sintético (`categoria_en · #<8 primeiros caracteres do id>`).
+Métricas consideram só pedidos que não foram `canceled`/`unavailable`. Nota e avaliações vêm do **pedido** (a Olist não avalia produtos), então um produto herda a nota dos pedidos em que apareceu.
+
+### `GET /api/v1/products`
+
+| Parâmetro | Padrão | Observação |
+|---|---|---|
+| `q` | — | busca no id e na categoria |
+| `category` | — | nome em português ou inglês; `sem_categoria` para os sem categoria |
+| `sort` | `units` | `units`, `rating`, `price_asc`, `price_desc` |
+| `page`, `page_size` | 1, 24 | `page_size` de 1 a 100 |
+
+Resposta: `{items: ProductSummary[], total, page, page_size}`. `ProductSummary`: `product_id, label, category, category_en, avg_price, avg_rating, review_count, units_sold, photos_qty`.
+
+### `GET /api/v1/products/{product_id}`
+
+`ProductSummary` + `weight_g, length_cm, height_cm, width_cm, name_length, description_length` + `related` (até 6 da mesma categoria). **404** se o produto não existe ou não teve venda válida.
+
+### `GET /api/v1/categories`
+
+`[{category, category_en, products, units_sold}]`, ordenado por unidades vendidas.
+
+---
+
+## Backoffice — análise de produtos (admin)
+
+Todas exigem token de administrador (401/403). Os SQLs são constantes parametrizadas em `src/app/database/analytics.py` (placeholders `?`, ordenação por allowlist) e rodam no snapshot DuckDB somente leitura; o LLM não participa.
+
+### `GET /api/v1/admin/overview`
+
+`{kpis, monthly, top_categories, top_products}`. `kpis`: receita, unidades, pedidos, ticket médio, nota média, % de atraso, nº de produtos, vendedores e categorias. `monthly`: `[{month: "YYYY-MM", revenue, units, orders}]`.
+
+### `GET /api/v1/admin/products`
+
+Mesmos filtros da vitrine mais `min_rating` (0 a 5), `sort` (`units`, `revenue`, `rating`, `price`, `bad_review_pct`, `late_pct`) e `order` (`asc`/`desc`; padrão `revenue desc`). Cada linha acrescenta `revenue, freight_avg, bad_review_pct` (% de avaliações com nota ≤ 2), `late_pct` (% de pedidos entregues após a data estimada), `sellers` e `rank` (por receita). Parâmetro inválido: **422**.
+
+### `GET /api/v1/admin/products/{product_id}`
+
+Linha do produto + atributos físicos, `rating_distribution` (sempre 5 faixas), `monthly` e `top_sellers` (até 5). **404** se não existe.
+
+### `GET /api/v1/admin/categories`
+
+`[{category, category_en, products, units_sold, revenue, avg_price, avg_rating, bad_review_pct, late_pct, rank}]`.
+
+---
+
 ## O que ainda não existe
 
-- Autenticação/autorização — qualquer um que alcance a API pode usar qualquer rota.
 - Endpoint de leitura do golden dataset (hoje só se grava, não se consulta pela API).
 - Paginação/listagem de conversas ou perguntas passadas.
+- Estado compartilhado entre workers: memória de sessão, resultados do chat e limiters ficam em memória do processo.
