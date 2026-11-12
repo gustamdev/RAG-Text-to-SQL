@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langgraph.graph import END, START, StateGraph
 
-from app.api.deps import get_agent_runner, get_db
+from app.api.deps import get_agent_runner, get_db, require_admin
 from app.services.agent_runner import AgentRunner
 from tests.test_golden_data import FakeDatabase
 
@@ -30,15 +30,27 @@ def db():
     return FakeDatabase()
 
 
+ADMIN = {"_id": "admin-1", "name": "Admin", "email": "admin@teste.com", "role": "admin"}
+
+
 @pytest.fixture
 def client_with_runner(app, db):
+    """Transporte HTTP/SSE do chat com o admin já resolvido (a autenticação em si é de test_chat_auth.py)."""
+
     def build(runner: AgentRunner) -> TestClient:
         app.dependency_overrides[get_agent_runner] = lambda: runner
         app.dependency_overrides[get_db] = lambda: db
+        app.dependency_overrides[require_admin] = lambda: ADMIN
+        app.state.chat_limiter = None
         return TestClient(app)
 
     yield build
     app.dependency_overrides.clear()
+    app.state.chat_limiter = None
+
+
+def _ask(client: TestClient, question: str = "oi") -> str:
+    return client.post("/api/v1/chat/questions", json={"question": question}).json()["question_id"]
 
 
 class FakeMemoryService:
@@ -126,24 +138,27 @@ def test_events_for_unknown_question_is_404(client_with_runner, runner):
 def test_feedback_thumbs_up_persists_to_golden_dataset(client_with_runner, runner, db):
     from app.database import golden_data
 
-    response = client_with_runner(runner).post(
-        "/api/v1/chat/questions/alguma-pergunta/feedback",
+    client = client_with_runner(runner)
+    response = client.post(
+        f"/api/v1/chat/questions/{_ask(client)}/feedback",
         json={"session_id": "sessao-1", "question": "q", "answer": "a", "is_approved": True},
     )
 
     assert response.status_code == 201
     assert response.json()["chat_range_id"]
     doc = db.collections[golden_data.TABELA].docs[0]
-    assert doc["conversation_id"] == "sessao-1"
+    # A memória é indexada por "<id do admin>:<session_id>": a sessão pertence a quem a criou.
+    assert doc["conversation_id"].endswith(":sessao-1")
     assert doc["is_approved"] is True
-    assert doc["context"] == "contexto de sessao-1"  # via FakeMemoryService.context_for_golden_record
+    assert doc["context"] == f"contexto de {doc['conversation_id']}"  # via FakeMemoryService.context_for_golden_record
 
 
 def test_feedback_thumbs_down_is_stored_as_false(client_with_runner, runner, db):
     from app.database import golden_data
 
-    client_with_runner(runner).post(
-        "/api/v1/chat/questions/alguma-pergunta/feedback",
+    client = client_with_runner(runner)
+    client.post(
+        f"/api/v1/chat/questions/{_ask(client)}/feedback",
         json={"session_id": "sessao-2", "question": "q", "answer": "resposta ruim", "is_approved": False},
     )
 
@@ -151,9 +166,19 @@ def test_feedback_thumbs_down_is_stored_as_false(client_with_runner, runner, db)
 
 
 def test_feedback_rejects_empty_question(client_with_runner, runner):
-    response = client_with_runner(runner).post(
-        "/api/v1/chat/questions/x/feedback",
+    client = client_with_runner(runner)
+    response = client.post(
+        f"/api/v1/chat/questions/{_ask(client)}/feedback",
         json={"session_id": "s", "question": "", "answer": "a", "is_approved": True},
     )
 
     assert response.status_code == 422
+
+
+def test_feedback_for_unknown_question_is_404(client_with_runner, runner, db):
+    response = client_with_runner(runner).post(
+        "/api/v1/chat/questions/nao-existe/feedback",
+        json={"session_id": "s", "question": "q", "answer": "a", "is_approved": True},
+    )
+
+    assert response.status_code == 404

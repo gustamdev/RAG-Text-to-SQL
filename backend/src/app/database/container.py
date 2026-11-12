@@ -12,6 +12,4 @@ def start_mongo_container() -> None:
             text=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        raise RuntimeError(
-            "Não foi possível iniciar o container do MongoDB via docker compose."
-        ) from exc
+        raise RuntimeError("Não foi possível iniciar o container do MongoDB via docker compose.") from exc

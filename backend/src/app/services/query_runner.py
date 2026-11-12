@@ -17,8 +17,8 @@ import duckdb
 from langsmith import traceable
 
 from app.database.sql_engine import DIALECT, EngineUnavailable, QueryTimeout, SQLEngine
-from app.prompts import UnsafeQueryError, validate_read_only_sql
 from app.schemas.query import QueryRequest, QueryResult, QueryStatus
+from app.sql_guard import UnsafeQueryError, validate_read_only_sql
 
 logger = logging.getLogger(__name__)
 

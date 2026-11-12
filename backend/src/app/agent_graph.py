@@ -39,28 +39,26 @@ from pydantic import BaseModel, Field
 from app.database.sql_engine import DIALECT
 from app.llm_models import SQLModel, TextModel, ValidationModel
 from app.prompts import (
-    DEFAULT_MAX_ROWS,
+    GROUNDING_RULES,
+    INSTRUCTION_HIERARCHY_RULES,
     PROMPT_OPTIMIZER,
     SQL_AGENT,
-    UnsafeQueryError,
     PromptOptimizerInput,
     PromptOptimizerOutput,
     SQLAgentInput,
     SQLAgentOutput,
-    _GROUNDING_RULES,
-    _INSTRUCTION_HIERARCHY_RULES,
-    _system,
-    _to_data,
-    validate_read_only_sql,
+    system_message,
+    to_data,
 )
 from app.schemas.query import QueryRequest, QueryResult
 from app.services.catalog import CatalogService
 from app.services.query_runner import QueryRunner
+from app.sql_guard import UnsafeQueryError, validate_read_only_sql
 
 logger = logging.getLogger(__name__)
 
 MAX_SQL_ATTEMPTS = 3
-# Mais baixo que o DEFAULT_MAX_ROWS de prompts.py: aqui o resultado ainda passa por um LLM
+# Mais baixo que o DEFAULT_MAX_ROWS de sql_guard.py: aqui o resultado ainda passa por um LLM
 # para virar texto, e um teto maior só infla essa segunda chamada sem ajudar a resposta.
 DEFAULT_ANSWER_MAX_ROWS = 200
 ANSWER_SAMPLE_ROWS = 50
@@ -99,15 +97,29 @@ Classifique <user_question> em:
 - "data": qualquer pergunta que só pode ser respondida consultando pedidos, clientes, produtos, vendedores, pagamentos, avaliações ou entregas armazenados no banco — mesmo que de forma indireta ou com termos vagos como "a loja", "as vendas", "os clientes"."""
 
 _TRIAGE_EXAMPLES = [
-    {"question": "Oi, o que você consegue fazer?", "intent": "chat", "reason": "Pergunta sobre o assistente, não sobre dados."},
-    {"question": "Qual a capital da França?", "intent": "chat", "reason": "Conhecimento geral, sem relação com o banco."},
-    {"question": "Quantos pedidos foram cancelados em 2018?", "intent": "data", "reason": "Exige contar registros na tabela de pedidos."},
-    {"question": "Como estão as vendas da loja?", "intent": "data", "reason": "'a loja' se refere aos dados de vendas armazenados, ainda que vago."},
+    {
+        "question": "Oi, o que você consegue fazer?",
+        "intent": "chat",
+        "reason": "Pergunta sobre o assistente, não sobre dados.",
+    },
+    {
+        "question": "Qual a capital da França?",
+        "intent": "chat",
+        "reason": "Conhecimento geral, sem relação com o banco.",
+    },
+    {
+        "question": "Quantos pedidos foram cancelados em 2018?",
+        "intent": "data",
+        "reason": "Exige contar registros na tabela de pedidos.",
+    },
+    {
+        "question": "Como estão as vendas da loja?",
+        "intent": "data",
+        "reason": "'a loja' se refere aos dados de vendas armazenados, ainda que vago.",
+    },
 ]
 _triage_few_shot = FewShotChatMessagePromptTemplate(
-    example_prompt=ChatPromptTemplate.from_messages(
-        [("human", "{question}"), ("ai", "intent={intent} ({reason})")]
-    ),
+    example_prompt=ChatPromptTemplate.from_messages([("human", "{question}"), ("ai", "intent={intent} ({reason})")]),
     examples=_TRIAGE_EXAMPLES,
 )
 
@@ -115,7 +127,7 @@ _triage_few_shot = FewShotChatMessagePromptTemplate(
 def _build_triage_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
-            _system(_TRIAGE_ROLE, _INSTRUCTION_HIERARCHY_RULES),
+            system_message(_TRIAGE_ROLE, INSTRUCTION_HIERARCHY_RULES),
             _triage_few_shot,
             ("human", "<user_question>\n{question}\n</user_question>"),
         ]
@@ -141,7 +153,7 @@ pode estar vazio."""
 def _build_chat_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
-            _system(_CHAT_ROLE, _INSTRUCTION_HIERARCHY_RULES),
+            system_message(_CHAT_ROLE, INSTRUCTION_HIERARCHY_RULES),
             (
                 "human",
                 "<conversation_context>\n{conversation_context}\n</conversation_context>\n\n"
@@ -166,7 +178,7 @@ Você resume em português o resultado de uma consulta SQL para a pessoa que per
 def _build_answer_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
-            _system(_ANSWER_ROLE, _INSTRUCTION_HIERARCHY_RULES, _GROUNDING_RULES),
+            system_message(_ANSWER_ROLE, INSTRUCTION_HIERARCHY_RULES, GROUNDING_RULES),
             (
                 "human",
                 "<user_question>\n{question}\n</user_question>\n\n"
@@ -213,7 +225,7 @@ def build_agent_graph(
         text = await chat_chain.ainvoke(
             {
                 "question": state["question"],
-                "conversation_context": _to_data(state.get("conversation_context") or "sem contexto anterior"),
+                "conversation_context": to_data(state.get("conversation_context") or "sem contexto anterior"),
             }
         )
         return {"answer": text}
@@ -297,9 +309,9 @@ def build_agent_graph(
             text = await answer_chain.ainvoke(
                 {
                     "question": state["question"],
-                    "columns": _to_data(result.columns),
-                    "rows": _to_data(result.rows[:ANSWER_SAMPLE_ROWS]),
-                    "truncated": _to_data(result.truncated),
+                    "columns": to_data(result.columns),
+                    "rows": to_data(result.rows[:ANSWER_SAMPLE_ROWS]),
+                    "truncated": to_data(result.truncated),
                 }
             )
             return {"answer": text}

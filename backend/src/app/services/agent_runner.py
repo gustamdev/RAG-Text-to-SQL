@@ -86,26 +86,41 @@ class AgentRunner:
         self._history: dict[str, list[AgentEvent]] = {}
         self._queues: dict[str, asyncio.Queue[AgentEvent | None]] = {}
         self._stored_at: dict[str, float] = {}
+        # Dono (id do usuário) de cada execução: o GET de eventos e o feedback só servem a ele.
+        self._owners: dict[str, str | None] = {}
         self._tasks: set[asyncio.Task] = set()
 
-    def ask(self, question: str, session_id: str | None = None) -> tuple[str, str]:
+    @staticmethod
+    def session_key(user_id: str | None, session_id: str) -> str:
+        """Chave da memória: a sessão pertence a quem a criou, então um admin não lê a de outro mesmo
+        que descubra o `session_id` dela."""
+        return f"{user_id}:{session_id}" if user_id else session_id
+
+    def ask(self, question: str, session_id: str | None = None, user_id: str | None = None) -> tuple[str, str]:
         """Devolve (question_id, session_id). Sem session_id, gera um novo — quem reenviar
         esse id na próxima pergunta ganha continuidade; quem ignorar, continua funcionando
-        igual a antes (cada pergunta numa sessão isolada, sem memória)."""
+        igual a antes (cada pergunta numa sessão isolada, sem memória). `user_id` registra o
+        dono da execução (ver `owns`)."""
         self._evict()
         session_id = session_id or uuid.uuid4().hex
         question_id = uuid.uuid4().hex
         self._history[question_id] = []
         self._queues[question_id] = asyncio.Queue()
         self._stored_at[question_id] = time.monotonic()
+        self._owners[question_id] = user_id
 
-        task = asyncio.create_task(self._run(question, question_id, session_id))
+        task = asyncio.create_task(self._run(question, question_id, self.session_key(user_id, session_id)))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return question_id, session_id
 
     def exists(self, question_id: str) -> bool:
         return question_id in self._history
+
+    def owns(self, question_id: str, user_id: str) -> bool:
+        """True só se a execução existe e foi iniciada por `user_id`. Quem chama responde 404 nos
+        dois casos de False, para não revelar que o id existe para outro usuário."""
+        return question_id in self._history and self._owners.get(question_id) == user_id
 
     async def events(self, question_id: str):
         """Repete o histórico (quem conectar atrasado não perde passos) e segue ao vivo."""
@@ -145,7 +160,7 @@ class AgentRunner:
             async for update in self.graph.astream(
                 {"question": question, "attempts": 0, "conversation_context": context}, config, stream_mode="updates"
             ):
-                (node, value), = update.items()
+                ((node, value),) = update.items()
                 event = _describe(node, value)
                 if node == "optimize" and event.detail:
                     tool_notes["tabelas"] = event.detail
@@ -183,3 +198,4 @@ class AgentRunner:
             self._history.pop(qid, None)
             self._queues.pop(qid, None)
             self._stored_at.pop(qid, None)
+            self._owners.pop(qid, None)

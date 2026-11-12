@@ -257,7 +257,11 @@ def test_optimize_node_forwards_conversation_context_to_prompt_optimizer(runner)
 
     asyncio.run(
         graph.ainvoke(
-            {"question": "Quantos pedidos existem?", "attempts": 0, "conversation_context": "contexto da sessão anterior"}
+            {
+                "question": "Quantos pedidos existem?",
+                "attempts": 0,
+                "conversation_context": "contexto da sessão anterior",
+            }
         )
     )
 

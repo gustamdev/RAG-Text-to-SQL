@@ -17,7 +17,7 @@ OLIST_BASE_URL = settings.OLIST_BASE_URL
 DATASET_DIR = settings.dataset_dir
 
 BATCH_SIZE = 5000
-SEED_YEAR = 2018
+SEED_YEAR = settings.SEED_YEAR  # None = todos os anos
 DOWNLOAD_TIMEOUT = 60
 
 CSV_FILES = {
@@ -183,20 +183,19 @@ def _load_frames(dataset_dir: Path) -> dict[str, pd.DataFrame]:
 
 
 def _aggregate_geolocation(geolocation: pd.DataFrame) -> pd.DataFrame:
-    return (
-        geolocation.groupby("geolocation_zip_code_prefix", as_index=False)
-        .agg(
-            geolocation_lat=("geolocation_lat", "mean"),
-            geolocation_lng=("geolocation_lng", "mean"),
-            geolocation_city=("geolocation_city", lambda s: s.mode().iat[0]),
-            geolocation_state=("geolocation_state", lambda s: s.mode().iat[0]),
-        )
+    return geolocation.groupby("geolocation_zip_code_prefix", as_index=False).agg(
+        geolocation_lat=("geolocation_lat", "mean"),
+        geolocation_lng=("geolocation_lng", "mean"),
+        geolocation_city=("geolocation_city", lambda s: s.mode().iat[0]),
+        geolocation_state=("geolocation_state", lambda s: s.mode().iat[0]),
     )
 
 
-def _filter_by_year(frames: dict[str, pd.DataFrame], year: int) -> dict[str, pd.DataFrame]:
+def _filter_by_year(frames: dict[str, pd.DataFrame], year: int | None) -> dict[str, pd.DataFrame]:
+    """Recorta o dataset aos pedidos de `year` (e ao que depende deles). `year=None` mantém todos."""
     orders = frames["orders"]
-    orders = orders[orders["order_purchase_timestamp"].dt.year == year]
+    if year is not None:
+        orders = orders[orders["order_purchase_timestamp"].dt.year == year]
     order_ids = orders["order_id"]
 
     order_items = frames["order_items"]
@@ -219,9 +218,7 @@ def _filter_by_year(frames: dict[str, pd.DataFrame], year: int) -> dict[str, pd.
     sellers = frames["sellers"]
     sellers = sellers[sellers["seller_id"].isin(order_items["seller_id"])]
 
-    zip_codes = pd.concat(
-        [customers["customer_zip_code_prefix"], sellers["seller_zip_code_prefix"]]
-    )
+    zip_codes = pd.concat([customers["customer_zip_code_prefix"], sellers["seller_zip_code_prefix"]])
     geolocation = frames["geolocation"]
     geolocation = geolocation[geolocation["geolocation_zip_code_prefix"].isin(zip_codes)]
 
@@ -287,7 +284,7 @@ def seed_database(client: MongoClient) -> None:
     if dataset_dir is None:
         return
 
-    logger.info("Carregando Olist (%d) no banco '%s'...", SEED_YEAR, MONGO_DB_NAME)
+    logger.info("Carregando Olist (%s) no banco '%s'...", SEED_YEAR or "todos os anos", MONGO_DB_NAME)
     try:
         frames = _filter_by_year(_load_frames(dataset_dir), SEED_YEAR)
     except (OSError, ValueError, KeyError) as exc:
@@ -295,7 +292,7 @@ def seed_database(client: MongoClient) -> None:
         return
 
     if frames["orders"].empty:
-        logger.error("Nenhum pedido de %d nos CSVs. Seed abortado.", SEED_YEAR)
+        logger.error("Nenhum pedido (%s) nos CSVs. Seed abortado.", SEED_YEAR or "todos os anos")
         return
 
     try:
@@ -306,9 +303,7 @@ def seed_database(client: MongoClient) -> None:
             _insert(db, collection, _to_documents(frames[collection]))
     except PyMongoError as exc:
         db.drop_collection("orders")  # sem orders o seed roda de novo no próximo start
-        logger.error(
-            "Falha ao importar para o MongoDB: %.300s... Seed será repetido na próxima inicialização.", exc
-        )
+        logger.error("Falha ao importar para o MongoDB: %.300s... Seed será repetido na próxima inicialização.", exc)
         return
 
     logger.info("Seed do Olist concluído.")

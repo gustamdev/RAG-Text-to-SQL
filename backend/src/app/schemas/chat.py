@@ -11,7 +11,9 @@ class AskRequest(BaseModel):
         default=None,
         min_length=1,
         max_length=MAX_SESSION_ID_CHARS,
-        description="Reenvie o session_id da resposta anterior para dar continuidade à conversa; omita para começar uma nova.",
+        description=(
+            "Reenvie o session_id da resposta anterior para dar continuidade à conversa; omita para começar uma nova."
+        ),
     )
 
 

@@ -135,3 +135,31 @@ def test_graph_error_never_calls_record_turn():
 
     assert events[-1].node == "error"
     assert memory.recorded == []
+
+
+def test_owner_is_tracked_per_question():
+    memory = FakeMemoryService()
+    runner = AgentRunner(_build_echo_graph(), memory, ttl_s=60, max_results=10)
+
+    async def scenario():
+        qid, _sid = runner.ask("pergunta", user_id="admin-1")
+        await _drain(runner, qid)
+        return qid
+
+    qid = asyncio.run(scenario())
+
+    assert runner.owns(qid, "admin-1")
+    assert not runner.owns(qid, "admin-2")
+    assert not runner.owns("nao-existe", "admin-1")
+    assert runner.exists(qid)
+
+
+def test_question_without_owner_belongs_to_nobody():
+    runner = AgentRunner(_build_echo_graph(), FakeMemoryService(), ttl_s=60, max_results=10)
+
+    async def scenario():
+        qid, _sid = runner.ask("pergunta")
+        await _drain(runner, qid)
+        return qid
+
+    assert not runner.owns(asyncio.run(scenario()), "admin-1")

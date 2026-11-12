@@ -30,9 +30,7 @@ def test_registrar_inserts_all_fields_with_a_uuid7_chat_range_id():
     db = FakeDatabase()
 
     chat_range_id = run(
-        golden_data.registrar(
-            db, conversation_id="s1", question="q1", answer="a1", context="ctx1", is_approved=True
-        )
+        golden_data.registrar(db, conversation_id="s1", question="q1", answer="a1", context="ctx1", is_approved=True)
     )
 
     assert UUID_RE.match(chat_range_id)  # UUID v7: o "7" na 3ª posição marca a versão

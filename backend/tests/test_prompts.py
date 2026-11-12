@@ -51,7 +51,9 @@ def _optimizer_output(table_name: str) -> PromptOptimizerOutput:
         original_question="q",
         interpreted_intent="i",
         relevant_tables=[RelevantTable(table_name=table_name, justification="j")],
-        relevant_columns=[RelevantColumn(table_name=table_name, column_name="customer_id", meaning="m", usage="select")],
+        relevant_columns=[
+            RelevantColumn(table_name=table_name, column_name="customer_id", meaning="m", usage="select")
+        ],
         filters=[],
         metrics_and_aggregations=[],
         grouping_and_ordering=[],

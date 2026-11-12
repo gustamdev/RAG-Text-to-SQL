@@ -1,20 +1,23 @@
 [project]
-name = "backend"
+name = "olist-insights-backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "API do Olist Insights: vitrine pública de produtos Olist, backoffice de análise (admin) e chat Text-to-SQL protegido, sobre MongoDB e DuckDB."
 readme = "README.md"
 authors = [
-    { name = "gustamdev", email = "aphexragedev@gmail.com" }
+    { name = "gustamdev" }
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "argon2-cffi>=25.1.0",
     "duckdb>=2.0.0",
+    "email-validator>=2.3.0",
     "fastapi>=0.162.0",
     "langchain-core>=1.7.0",
     "langchain-openai>=1.7.3",
     "langgraph>=1.2.18",
     "pandas>=3.1.0",
     "pydantic-settings>=2.16.1",
+    "pyjwt>=2.15.1",
     "pymongo>=4.19.0",
     "sqlglot>=30.25.0",
     "uuid-utils>=0.19.0",
@@ -31,7 +34,9 @@ module-name = "app"
 [dependency-groups]
 dev = [
     "httpx2>=2.16.0",
+    "mongomock-motor>=0.0.36",
     "pytest>=9.1.1",
+    "ruff>=0.15.0",
 ]
 
 [tool.pytest.ini_options]
@@ -39,3 +44,22 @@ markers = [
     "integration: precisa de serviços reais (Mongo, DuckDB, OpenAI) — não roda no `pytest` padrão.",
 ]
 addopts = "-m \"not integration\""
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Prompts são texto literal enviado ao modelo: quebrar linha mudaria o prompt.
+"src/app/prompts.py" = ["E501"]
+"src/app/agent_graph.py" = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Depends()/Query()/Path() nos defaults dos parâmetros é o idioma de injeção do FastAPI.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Security"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]

@@ -13,7 +13,9 @@ def run(coro):
 
 def test_record_feedback_persists_question_answer_and_session_context():
     db = FakeDatabase()
-    memory = MemoryService(FakeSummarizer(responses=["x"]), max_turns=10, context_max_tokens=10_000, ttl_s=3600, max_sessions=100)
+    memory = MemoryService(
+        FakeSummarizer(responses=["x"]), max_turns=10, context_max_tokens=10_000, ttl_s=3600, max_sessions=100
+    )
 
     async def scenario():
         # A pergunta já foi registrada na memória pelo AgentRunner antes do usuário poder
@@ -37,12 +39,12 @@ def test_record_feedback_persists_question_answer_and_session_context():
 
 def test_record_feedback_thumbs_down_is_stored_as_false():
     db = FakeDatabase()
-    memory = MemoryService(FakeSummarizer(responses=["x"]), max_turns=10, context_max_tokens=10_000, ttl_s=3600, max_sessions=100)
+    memory = MemoryService(
+        FakeSummarizer(responses=["x"]), max_turns=10, context_max_tokens=10_000, ttl_s=3600, max_sessions=100
+    )
 
     chat_range_id = run(
-        record_feedback(
-            db, memory, session_id="sessao-2", question="q", answer="resposta errada", is_approved=False
-        )
+        record_feedback(db, memory, session_id="sessao-2", question="q", answer="resposta errada", is_approved=False)
     )
 
     doc = db.collections[golden_data.TABELA].docs[0]

@@ -16,7 +16,7 @@ def get_dev_ip() -> str:
 
 def print_banner(host: str, port: int) -> None:
     rows = [
-        "RAG Backend",
+        "Olist Insights API",
         f"Servidor: http://{host}:{port}",
         f"Docs:     http://{host}:{port}/docs",
     ]

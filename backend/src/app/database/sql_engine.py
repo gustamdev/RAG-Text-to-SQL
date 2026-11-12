@@ -1,13 +1,16 @@
 """Motor SQL: snapshot DuckDB das coleções do Mongo, aberto somente leitura.
 
 O Mongo continua sendo a fonte. O DuckDB é uma cópia analítica que existe só para o
-SQL gerado pelos agentes ter onde rodar. Este módulo não valida SQL: quem chama
-(`services/query_runner.py`) passa tudo por `validate_read_only_sql` antes.
+SQL gerado pelos agentes ter onde rodar, e para as consultas fixas da vitrine e do backoffice
+(`database/analytics.py`). Este módulo não valida SQL: o SQL de agente passa por
+`validate_read_only_sql` (`services/query_runner.py`); o SQL fixo é constante do código, e
+qualquer valor variável entra por `params` (placeholders), nunca por interpolação.
 """
 
 import asyncio
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -98,8 +101,13 @@ class SQLEngine:
         name="duckdb_execute",
         process_inputs=lambda inputs: {k: v for k, v in inputs.items() if k != "self"},
     )
-    async def run(self, sql: str, max_rows: int) -> tuple[list[str], list[tuple[Any, ...]], bool]:
-        """Executa uma consulta JÁ validada. Retorna (colunas, linhas, truncado)."""
+    async def run(
+        self, sql: str, max_rows: int, params: Sequence[Any] | None = None
+    ) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+        """Executa uma consulta JÁ validada (ou constante do código). Retorna (colunas, linhas, truncado).
+
+        `params` são os valores dos placeholders `?` do SQL.
+        """
         if self._con is None:
             raise EngineUnavailable("Motor SQL indisponível.")
 
@@ -107,7 +115,7 @@ class SQLEngine:
             # Um cursor por consulta: a conexão DuckDB não é segura para uso concorrente entre threads.
             cursor = self._con.cursor()
             try:
-                return await asyncio.to_thread(self._fetch, cursor, sql, max_rows)
+                return await asyncio.to_thread(self._fetch, cursor, sql, max_rows, params)
             except duckdb.InterruptException as exc:
                 raise QueryTimeout(f"Consulta excedeu {self.timeout_s:g}s.") from exc
             finally:
@@ -115,9 +123,9 @@ class SQLEngine:
 
     @staticmethod
     def _fetch(
-        cursor: duckdb.DuckDBPyConnection, sql: str, max_rows: int
+        cursor: duckdb.DuckDBPyConnection, sql: str, max_rows: int, params: Sequence[Any] | None = None
     ) -> tuple[list[str], list[tuple[Any, ...]], bool]:
-        cursor.execute(sql)
+        cursor.execute(sql, params or [])
         columns = [column[0] for column in cursor.description or []]
         rows = cursor.fetchmany(max_rows + 1)
         return columns, rows[:max_rows], len(rows) > max_rows

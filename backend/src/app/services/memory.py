@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from langchain_core.language_models import BaseChatModel
 from langsmith import traceable
 
-from app.prompts import SUMMARIZE_CONTEXT, SummarizedTurn, SummarizeContextInput
+from app.prompts import SUMMARIZE_CONTEXT, SummarizeContextInput, SummarizedTurn
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,7 @@ def _truncate_to_budget(text: str, budget_tokens: int, cost: Callable[[str], int
 
 
 class MemoryService:
-    def __init__(
-        self, llm: BaseChatModel, *, max_turns: int, context_max_tokens: int, ttl_s: float, max_sessions: int
-    ):
+    def __init__(self, llm: BaseChatModel, *, max_turns: int, context_max_tokens: int, ttl_s: float, max_sessions: int):
         self.llm = llm
         self.max_turns = max_turns
         self.context_max_tokens = context_max_tokens

@@ -1,7 +1,9 @@
+import logging
 import os
+import secrets
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Caminho absoluto: com reload, o worker do uvicorn importa app.main sem passar
@@ -23,9 +25,17 @@ class Settings(BaseSettings):
     MONGO_DB_NAME: str = "olist"
     MONGO_AUTOSTART: bool = True
 
-    OLIST_BASE_URL: str = (
-        "https://raw.githubusercontent.com/gustamdev/Olist-E-Commerce-Public-Dataset-2017-2018/main"
-    )
+    # Autenticação (JWT HS256). Em prod o segredo é obrigatório; fora dele, se vazio, um
+    # segredo efêmero é gerado a cada start (os tokens deixam de valer ao reiniciar).
+    JWT_SECRET: SecretStr = SecretStr("")
+    JWT_EXPIRE_MINUTES: int = 60 * 12
+    LOGIN_MAX_FAILURES: int = 5
+    LOGIN_WINDOW_S: float = 900
+
+    OLIST_BASE_URL: str = "https://raw.githubusercontent.com/gustamdev/Olist-E-Commerce-Public-Dataset-2017-2018/main"
+    # Ano dos pedidos que o seed carrega no Mongo. Vazio (SEED_YEAR=) = todos os anos.
+    # Mudar o valor só tem efeito num banco ainda vazio: o seed não roda sobre dados existentes.
+    SEED_YEAR: int | None = 2018
 
     # Vazio = BACKEND_DIR/data/olist.duckdb
     DUCKDB_PATH: str = ""
@@ -43,6 +53,12 @@ class Settings(BaseSettings):
     # memória para o GET /chat/questions/{id}/events poder ler (ver services/agent_runner.py).
     CHAT_RESULT_TTL_S: float = 900
     CHAT_RESULT_MAX: int = 200
+    # Limite de perguntas ao chat por administrador (janela deslizante em memória, por processo).
+    CHAT_RATE_LIMIT: int = 20
+    # Vitrine pública: pedidos por IP e janela (s). Cada consulta recalcula agregações no DuckDB.
+    PUBLIC_RATE_LIMIT: int = 120
+    PUBLIC_RATE_WINDOW_S: float = 60
+    CHAT_RATE_WINDOW_S: float = 600
 
     # Memória de sessão do agente (services/memory.py): histórico recente + resumo
     # consolidado por session_id (AskRequest.session_id), para dar continuidade entre
@@ -60,6 +76,24 @@ class Settings(BaseSettings):
     LANGSMITH_API_KEY: SecretStr = SecretStr("")
     LANGSMITH_PROJECT: str = "rag-backend"
     LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"
+
+    @field_validator("SEED_YEAR", mode="before")
+    @classmethod
+    def _empty_seed_year_means_all(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def _ensure_jwt_secret(self) -> "Settings":
+        secret = self.JWT_SECRET.get_secret_value()
+        if secret:
+            if self.ENV == "prod" and len(secret) < 32:
+                raise ValueError("JWT_SECRET precisa ter ao menos 32 caracteres quando ENV=prod.")
+            return self
+        if self.ENV == "prod":
+            raise ValueError("JWT_SECRET é obrigatório quando ENV=prod.")
+        logging.getLogger(__name__).warning("JWT_SECRET vazio: usando segredo efêmero (tokens expiram no restart).")
+        self.JWT_SECRET = SecretStr(secrets.token_urlsafe(48))
+        return self
 
     @property
     def duckdb_path(self) -> Path:

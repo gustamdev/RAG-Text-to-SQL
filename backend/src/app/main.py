@@ -8,11 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 
 from app.agent_graph import build_agent_graph
-from app.api.routes import chat, health
+from app.api.routes import auth, backoffice, chat, health, products
 from app.config import settings
+from app.core.errors import DomainError, domain_error_handler
 from app.core.logging import setup_logging
+from app.core.rate_limit import FailureLimiter
 from app.database.connection import close_db, get_database, init_db
 from app.database.container import start_mongo_container
+from app.database.indexes import ensure_indexes
 from app.database.seed_mongo import is_seeded, seed_database
 from app.database.sql_engine import SQLEngine, build_snapshot
 from app.llm_models import ValidationModel
@@ -48,6 +51,9 @@ async def lifespan(app: FastAPI):
 
     await init_db()
     logger.info("Conectado ao MongoDB em %s", settings.MONGO_URI)
+
+    await ensure_indexes(get_database())
+    app.state.login_limiter = FailureLimiter(settings.LOGIN_MAX_FAILURES, settings.LOGIN_WINDOW_S)
 
     await _prepare_data()
 
@@ -90,12 +96,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="RAG Backend",
+    title="Olist Insights API",
     docs_url=None if settings.is_prod else "/docs",
     redoc_url=None if settings.is_prod else "/redoc",
     openapi_url=None if settings.is_prod else "/openapi.json",
     lifespan=lifespan,
 )
+app.add_exception_handler(DomainError, domain_error_handler)
 
 allowed_origins = [origin.strip() for origin in settings.CORS_EXTRA_ORIGINS.split(",") if origin.strip()]
 if not settings.is_prod:
@@ -105,10 +112,13 @@ if not settings.is_prod:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 api_prefix = f"/api/{API_VERSION}"
 app.include_router(health.router, prefix=api_prefix)
-app.include_router(chat.router, prefix=api_prefix)
+app.include_router(chat.router, prefix=api_prefix)  # só admin
+app.include_router(auth.router, prefix=api_prefix)
+app.include_router(products.router, prefix=api_prefix)  # público
+app.include_router(backoffice.router, prefix=api_prefix)  # só admin

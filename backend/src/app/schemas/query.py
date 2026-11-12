@@ -3,7 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.prompts import DEFAULT_MAX_ROWS, MAX_ROWS_CAP, SQLAgentOutput
+from app.prompts import SQLAgentOutput
+from app.sql_guard import DEFAULT_MAX_ROWS, MAX_ROWS_CAP
 
 # pending/running: em andamento. Os demais são finais; rejected, sql_error e timeout
 # dão ao agente motivo para gerar de novo, unavailable pede só reenvio.
