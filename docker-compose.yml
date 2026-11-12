@@ -1,12 +1,50 @@
+# Padrão (dev): só o MongoDB. O backend e o frontend rodam na máquina (uv / npm).
+#   docker compose up -d mongo
+#
+# Stack completa em containers (perfil "full"):
+#   docker compose --profile full up --build
+# Requer backend/.env com OPENAI_API_KEY e JWT_SECRET (32+ caracteres). O seed baixa o dataset Olist no primeiro start.
+# Crie o admin: docker compose exec backend python scripts/create_admin.py voce@email.com "Seu Nome"
+
 services:
   mongo:
     image: mongo:8
-    container_name: rag-mongodb
+    container_name: olist-mongodb
     restart: unless-stopped
+    # Só localhost: o Mongo não tem autenticação, não pode ficar exposto na rede.
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
 
+  backend:
+    profiles: ["full"]
+    build: ./backend
+    container_name: olist-backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    env_file:
+      - ./backend/.env
+    environment:
+      ENV: prod
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_AUTOSTART: "false"
+      DUCKDB_PATH: /app/data/olist.duckdb
+    volumes:
+      - backend_data:/app/data
+    # Sem "ports": só o nginx do frontend alcança o backend (rede interna do compose).
+
+  frontend:
+    profiles: ["full"]
+    build: ./frontend
+    container_name: olist-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:8080"
+
 volumes:
   mongo_data:
+  backend_data:
