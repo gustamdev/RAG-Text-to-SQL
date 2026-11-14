@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.api.deps import get_product_analytics, require_admin
+from app.api.deps import get_product_analytics, get_snapshot_service, require_admin
 from app.schemas.product import (
     AdminCategoryRow,
     AdminProductDetail,
@@ -13,7 +13,9 @@ from app.schemas.product import (
     Overview,
     SortOrder,
 )
+from app.schemas.snapshot import SnapshotStatus
 from app.services.product_analytics import ProductAnalytics
+from app.services.snapshot import SnapshotService
 
 router = APIRouter(prefix="/admin", tags=["backoffice"], dependencies=[Depends(require_admin)])
 
@@ -49,3 +51,14 @@ async def get_product(
 @router.get("/categories", response_model=list[AdminCategoryRow])
 async def list_categories(service: ProductAnalytics = Depends(get_product_analytics)) -> list[AdminCategoryRow]:
     return await service.admin_categories()
+
+
+@router.get("/snapshot", response_model=SnapshotStatus)
+async def snapshot_status(service: SnapshotService = Depends(get_snapshot_service)) -> SnapshotStatus:
+    return SnapshotStatus(**service.status())
+
+
+@router.post("/snapshot/refresh", response_model=SnapshotStatus)
+async def refresh_snapshot(service: SnapshotService = Depends(get_snapshot_service)) -> SnapshotStatus:
+    """Refresh manual: reconstrói o snapshot do agente agora (junta-se a um rebuild em andamento)."""
+    return SnapshotStatus(**await service.refresh())

@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from langchain_core.language_models import BaseChatModel
 from langsmith import traceable
 
+from app.core.pii import redact
 from app.prompts import SUMMARIZE_CONTEXT, SummarizeContextInput, SummarizedTurn
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,9 @@ class MemoryService:
         """Grava a interação depois da resposta pronta; dispara a consolidação se isso
         completar um lote de `max_turns` pendentes. Chamado depois do grafo responder."""
         session = self._get_or_create(session_id)
-        turn = SessionTurn(question=question, answer=answer, tool_note=tool_note)
+        turn = SessionTurn(
+            question=redact(question), answer=redact(answer), tool_note=redact(tool_note) if tool_note else None
+        )
         async with session.lock:
             session.overflow.append(turn)
             await self._drain(session)

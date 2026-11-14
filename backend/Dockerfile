@@ -50,5 +50,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=4)"]
 
 # Atrás do nginx (rede interna do compose, porta 8000 não publicada): confia no X-Forwarded-For
-# para o limitador de login enxergar o IP real do cliente e não o do proxy.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# para o limitador de login enxergar o IP real do cliente e não o do proxy. Quem pode ser
+# proxy vem de FORWARDED_ALLOW_IPS (o compose define a sub-rede dele); sem a variável, só 127.0.0.1.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

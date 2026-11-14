@@ -11,6 +11,7 @@ processo ou chame `invalidate()`.
 
 import asyncio
 import logging
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langsmith import traceable
@@ -23,20 +24,30 @@ from app.prompts import (
     TableDescriptionInput,
     TableMetadata,
     sample_table,
+    sample_table_duckdb,
 )
+from app.sql_guard import SHOP_VIEW_TABLES, is_forbidden_table
 
 logger = logging.getLogger(__name__)
 
 
 class CatalogService:
-    def __init__(self, db: AsyncDatabase, llm: BaseChatModel, *, known_tables: set[str]):
+    def __init__(self, db: AsyncDatabase, llm: BaseChatModel, *, known_tables: set[str], engine: Any = None):
         self.db = db
         self.llm = llm
-        self.known_tables = known_tables
+        # Com `engine`, a amostra vem do DuckDB projetado (E7); sem ele, do Mongo (só tabelas não-`shop_*`).
+        self.engine = engine
+        self.known_tables = {name for name in known_tables if not is_forbidden_table(name)}
         self._cache: dict[str, TableMetadata] = {}
-        # Uma trava por tabela: duas perguntas simultâneas sobre "orders" não geram o
-        # metadado em dobro, mas uma sobre "orders" e outra sobre "products" não se bloqueiam.
-        self._locks: dict[str, asyncio.Lock] = {name: asyncio.Lock() for name in known_tables}
+        # Uma trava por tabela (criada sob demanda): duas perguntas simultâneas sobre "orders" não
+        # geram o metadado em dobro, mas uma sobre "orders" e outra sobre "products" não se bloqueiam.
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def update_tables(self, tables: set[str]) -> None:
+        """Chamado após cada rebuild do snapshot: aceita tabelas novas e refaz o metadado das views da loja."""
+        self.known_tables = {name for name in tables if not is_forbidden_table(name)}
+        for name in SHOP_VIEW_TABLES:
+            self.invalidate(name)
 
     async def get(self, table_names: list[str] | None = None) -> list[TableMetadata]:
         """Catálogo das tabelas pedidas (ou de todas, se omitido), gerando o que faltar no cache."""
@@ -60,11 +71,15 @@ class CatalogService:
         process_inputs=lambda inputs: {k: v for k, v in inputs.items() if k != "self"},
     )
     async def _build(self, table_name: str) -> None:
-        async with self._locks[table_name]:
+        async with self._locks.setdefault(table_name, asyncio.Lock()):
             if table_name in self._cache:  # outra chamada já construiu enquanto esperávamos a trava
                 return
             logger.info("Gerando metadados de %s (amostra + LLM)...", table_name)
-            sample = await sample_table(self.db, table_name)
+            sample = (
+                await sample_table_duckdb(self.engine, table_name)
+                if self.engine is not None
+                else await sample_table(self.db, table_name)
+            )
             columns = await COLUMN_METADATA.chain(self.llm).ainvoke(ColumnMetadataInput(table=sample))
             other_tables = sorted(self.known_tables - {table_name})
             description = await TABLE_DESCRIPTION.chain(self.llm).ainvoke(

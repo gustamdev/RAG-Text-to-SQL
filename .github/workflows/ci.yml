@@ -57,3 +57,25 @@ jobs:
         run: npx vitest run
       - name: Build
         run: npm run build
+
+  admin:
+    name: Admin (vitest + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Instalar dependências (lock da loja)
+        run: npm ci
+        working-directory: frontend
+      - name: Reusar node_modules da loja
+        run: ln -s ../frontend/node_modules frontend-admin/node_modules
+      - name: Testes
+        run: npm test
+        working-directory: frontend-admin
+      - name: Build
+        run: npm run build
+        working-directory: frontend-admin

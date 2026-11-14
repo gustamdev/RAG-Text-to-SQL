@@ -21,6 +21,19 @@ DEFAULT_MAX_ROWS = 500
 MAX_ROWS_CAP = 5000
 
 
+# Política de tabelas da loja (E7): o agente só enxerga as views projetadas sem PII; coleções brutas
+# (`shop_*`, users, golden_data) são barradas mesmo que um dia apareçam no snapshot.
+SHOP_VIEW_TABLES = frozenset({"shop_orders_view", "shop_order_items_view", "shop_payments_view", "shop_customers_view"})
+FORBIDDEN_TABLES = frozenset({"users", "golden_data"})
+# Cruzar a loja com estas tabelas do Olist permitiria reidentificar clientes (CEP/UF + datas).
+_OLIST_REIDENTIFYING = frozenset({"customers", "geolocation"})
+
+
+def is_forbidden_table(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in FORBIDDEN_TABLES or (lowered.startswith("shop_") and lowered not in SHOP_VIEW_TABLES)
+
+
 def check_dialect(value: str) -> str:
     dialect = value.strip().lower()
     supported = {d.value for d in Dialects if d.value}
@@ -230,6 +243,12 @@ def validate_read_only_sql(
             raise UnsafeQueryError("Tabela fora do catálogo: só o schema main é permitido.")
         if table.name and not _refers_to_cte(table):
             tables.add(table.name)
+
+    if forbidden := sorted(t for t in tables if is_forbidden_table(t)):
+        raise UnsafeQueryError(f"Tabelas fora do catálogo: {', '.join(forbidden)}.")
+    lowered = {t.lower() for t in tables}
+    if lowered & SHOP_VIEW_TABLES and lowered & _OLIST_REIDENTIFYING:
+        raise UnsafeQueryError("Cruzar as views da loja com customers/geolocation é proibido (reidentificação).")
 
     if allowed_tables is not None:
         allowed = {name.lower() for name in allowed_tables}

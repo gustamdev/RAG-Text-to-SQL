@@ -4,7 +4,7 @@ import { categoryIcon } from './categoryIcons'
 import { brl, measure, monthLabel, num, pct, rating, weight } from './format'
 import { safeRedirect } from './navigation'
 import { pageWindow, totalPages } from './pagination'
-import { backofficeProductHref, categoryHref, categoryLabel, productHref } from './product'
+import { categoryHref, categoryLabel, productHref } from './product'
 import { enumParam, floatParam, intParam, withParams } from './searchParams'
 
 // O Intl do pt-BR separa "R$" do valor com espaço sem quebra.
@@ -12,8 +12,8 @@ const plain = (text: string) => text.replace(/ /g, ' ')
 
 describe('safeRedirect', () => {
   it('aceita só caminhos internos', () => {
-    expect(safeRedirect('/backoffice/produtos/abc')).toBe('/backoffice/produtos/abc')
-    expect(safeRedirect('/backoffice/produtos?q=bed')).toBe('/backoffice/produtos?q=bed')
+    expect(safeRedirect('/produtos/abc')).toBe('/produtos/abc')
+    expect(safeRedirect('/produtos?q=bed')).toBe('/produtos?q=bed')
   })
 
   it('rejeita URLs externas, protocolo relativo, barra invertida e vazio', () => {
@@ -25,8 +25,6 @@ describe('safeRedirect', () => {
   it('não redireciona de volta para o login (evita laço)', () => {
     expect(safeRedirect('/login')).toBeNull()
     expect(safeRedirect('/login?x=1')).toBeNull()
-    expect(safeRedirect('/backoffice/login')).toBeNull()
-    expect(safeRedirect('/backoffice/login?redirect=/backoffice')).toBeNull()
   })
 })
 
@@ -81,7 +79,6 @@ describe('helpers de produto', () => {
   it('links escapam o id', () => {
     expect(productHref('abc123')).toBe('/produtos/abc123')
     expect(productHref('a/b c')).toBe('/produtos/a%2Fb%20c')
-    expect(backofficeProductHref('abc123')).toBe('/backoffice/produtos/abc123')
     expect(categoryHref('cama_mesa_banho')).toBe('/produtos?category=cama_mesa_banho')
   })
 

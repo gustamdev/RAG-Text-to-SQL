@@ -25,9 +25,11 @@ a mesma função com `SQLAgentInput.relevant_catalog()` e devolve o erro para no
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from langchain_core.language_models import BaseChatModel
@@ -40,7 +42,8 @@ from langchain_core.runnables import Runnable, RunnableLambda, RunnablePassthrou
 from pydantic import BaseModel, Field, model_validator
 from pymongo.asynchronous.database import AsyncDatabase
 
-from app.sql_guard import DEFAULT_MAX_ROWS, MAX_ROWS_CAP, SQLDialect
+from app.core.pii import redact_value
+from app.sql_guard import DEFAULT_MAX_ROWS, MAX_ROWS_CAP, SQLDialect, is_forbidden_table
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +359,17 @@ _OUTPUT_RULES = f"""\
 - Redija os textos livres em {OUTPUT_LANGUAGE}. Preserve nomes de tabelas e colunas exatamente como recebidos."""
 
 
+SHOP_VIEWS_RULES = """\
+## Tabelas da loja simulada (views sem dados pessoais)
+- shop_orders_view: um registro por pedido da loja (order_id, customer_pseudo, status, order_date, items_qty, subtotal_cents, freight_cents, discount_cents, total_cents, shipping_option, destination_state, destination_zip3). Valores em CENTAVOS de real: divida por 100 para reais. Status: created, paid, refused, shipped, delivered, canceled. Receita de verdade = pedidos com status paid, shipped ou delivered.
+- shop_order_items_view: um registro por item de pedido (order_id, order_date, product_id, category, qty, unit_price_cents, line_total_cents). Liga a shop_orders_view por order_id e ao produto Olist por product_id.
+- shop_payments_view: um registro por pagamento (payment_id, order_id, customer_pseudo, status approved/refused/timeout, card_brand, installments, amount_cents, payment_date).
+- shop_customers_view: um registro por cliente ativo (customer_pseudo, signup_date, last_login_date, state, zip3). Sem nome, e-mail nem endereço: o cliente é só um pseudônimo.
+- Exemplos de pergunta: "qual foi o último pedido da loja?", "receita por UF na loja", "quantos pedidos foram recusados?", "qual o ticket médio dos pedidos pagos?", "quais produtos mais vendem na loja?".
+- É PROIBIDO juntar as views da loja (shop_*_view) com as tabelas customers ou geolocation do Olist. Para localização use destination_state/destination_zip3 ou state/zip3 das próprias views.
+- Não existem nome, e-mail, endereço, telefone nem final de cartão: se a pergunta pedir isso, use status "unanswerable"."""
+
+
 def system_message(*sections: str) -> SystemMessagePromptTemplate:
     return SystemMessagePromptTemplate.from_template("\n\n".join(sections))
 
@@ -457,7 +471,9 @@ Descreva a tabela abaixo.
 def build_table_description_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
-            system_message(_TABLE_DESCRIPTION_ROLE, INSTRUCTION_HIERARCHY_RULES, GROUNDING_RULES, _OUTPUT_RULES),
+            system_message(
+                _TABLE_DESCRIPTION_ROLE, SHOP_VIEWS_RULES, INSTRUCTION_HIERARCHY_RULES, GROUNDING_RULES, _OUTPUT_RULES
+            ),
             HumanMessagePromptTemplate.from_template(_TABLE_DESCRIPTION_HUMAN),
         ]
     )
@@ -521,7 +537,9 @@ Prepare a solicitação para o agente SQL.
 def build_prompt_optimizer_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
-            system_message(_PROMPT_OPTIMIZER_ROLE, INSTRUCTION_HIERARCHY_RULES, GROUNDING_RULES, _OUTPUT_RULES),
+            system_message(
+                _PROMPT_OPTIMIZER_ROLE, SHOP_VIEWS_RULES, INSTRUCTION_HIERARCHY_RULES, GROUNDING_RULES, _OUTPUT_RULES
+            ),
             HumanMessagePromptTemplate.from_template(_PROMPT_OPTIMIZER_HUMAN),
         ]
     )
@@ -579,7 +597,9 @@ Gere a consulta para a solicitação abaixo.
 def build_sql_agent_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
-            system_message(_SQL_AGENT_ROLE, INSTRUCTION_HIERARCHY_RULES, GROUNDING_RULES, _OUTPUT_RULES),
+            system_message(
+                _SQL_AGENT_ROLE, SHOP_VIEWS_RULES, INSTRUCTION_HIERARCHY_RULES, GROUNDING_RULES, _OUTPUT_RULES
+            ),
             HumanMessagePromptTemplate.from_template(_SQL_AGENT_HUMAN),
         ]
     )
@@ -779,6 +799,8 @@ def _compact_value(value: Any) -> Any:
         return value[:MAX_CELL_CHARS] + "…"
     if isinstance(value, (bytes, bytearray)):
         return "<binário>"
+    if isinstance(value, Decimal):
+        return float(value)
     return value
 
 
@@ -788,6 +810,8 @@ async def sample_table(db: AsyncDatabase, table_name: str, *, size: int = DEFAUL
     Com `size` abaixo de 5% da coleção, o MongoDB usa cursor pseudoaleatório em vez de
     ordenar tudo. O `_id` é removido por ser interno ao Mongo, e não um dado de origem.
     """
+    if is_forbidden_table(table_name):  # coleções brutas da loja têm PII: só views projetadas chegam ao LLM
+        raise ValueError(f"Tabela fora do catálogo: {table_name!r}")
     size = max(1, min(size, MAX_SAMPLE_SIZE))
     cursor = await db[table_name].aggregate([{"$sample": {"size": size}}, {"$project": {"_id": 0}}])
     rows = await cursor.to_list(length=size)
@@ -796,4 +820,30 @@ async def sample_table(db: AsyncDatabase, table_name: str, *, size: int = DEFAUL
         table_name=table_name,
         columns=infer_columns(rows),
         sample_rows=[{key: _compact_value(value) for key, value in row.items()} for row in rows],
+    )
+
+
+_TABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+async def sample_table_duckdb(engine: Any, table_name: str, *, size: int = DEFAULT_SAMPLE_SIZE) -> TableSample:
+    """Amostra do snapshot DuckDB (views projetadas sem PII), nunca do Mongo bruto.
+
+    As colunas vêm do esquema da tabela, não das linhas: tabela vazia (loja sem pedidos) ainda
+    tem colunas para o LLM descrever. `table_name` já é validado contra o catálogo e por regex.
+    """
+    if not _TABLE_NAME.fullmatch(table_name) or is_forbidden_table(table_name):
+        raise ValueError(f"Tabela fora do catálogo: {table_name!r}")
+    size = max(1, min(size, MAX_SAMPLE_SIZE))
+    _, schema, _ = await engine.run(
+        "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position",
+        1000,
+        [table_name],
+    )
+    names, rows, _ = await engine.run(f'SELECT * FROM "{table_name}" USING SAMPLE {size} ROWS', size)
+    return TableSample(
+        schema_name="main",
+        table_name=table_name,
+        columns=[ColumnSpec(name=name, data_type=kind.lower()) for name, kind in schema],
+        sample_rows=[{n: _compact_value(redact_value(v)) for n, v in zip(names, row, strict=True)} for row in rows],
     )

@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 
 def setup_logging() -> None:
@@ -11,3 +12,11 @@ def setup_logging() -> None:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False  # o uvicorn já tem handler próprio
+
+
+def mask_uri(uri: str) -> str:
+    """Esconde user:senha de uma URI (mongodb://user:pass@host) antes de logar, mesmo com '@' na senha."""
+    parts = urlsplit(uri)
+    if "@" not in parts.netloc:
+        return uri
+    return urlunsplit(parts._replace(netloc="***@" + parts.netloc.rpartition("@")[2]))

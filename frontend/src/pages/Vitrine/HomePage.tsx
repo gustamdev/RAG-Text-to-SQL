@@ -44,12 +44,6 @@ export default function HomePage() {
                 Ver catálogo
                 <ArrowRight aria-hidden="true" />
               </Link>
-              <Link
-                to="/backoffice"
-                className={cn(buttonVariants({ variant: 'outline', size: 'lg' }), 'h-12 text-xs font-bold uppercase tracking-wider')}
-              >
-                Entrar no backoffice
-              </Link>
             </div>
           </div>
 

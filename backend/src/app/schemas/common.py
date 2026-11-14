@@ -2,6 +2,7 @@ from enum import StrEnum
 
 
 class Role(StrEnum):
-    """Papéis da API. Só existe admin: não há auto-cadastro, e a conta nasce por scripts/create_admin.py."""
+    """Papéis da API. Admin nasce por scripts/create_admin.py; customer é o cliente da loja (auto-cadastro)."""
 
     ADMIN = "admin"
+    CUSTOMER = "customer"

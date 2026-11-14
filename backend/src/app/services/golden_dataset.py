@@ -3,6 +3,7 @@ memória (services/memory.py) e grava no Mongo (database/golden_data.py)."""
 
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.core.pii import redact
 from app.database import golden_data
 from app.services.memory import MemoryService
 
@@ -20,8 +21,8 @@ async def record_feedback(
     return await golden_data.registrar(
         db,
         conversation_id=session_id,
-        question=question,
-        answer=answer,
+        question=redact(question),
+        answer=redact(answer),
         context=context,
         is_approved=is_approved,
     )

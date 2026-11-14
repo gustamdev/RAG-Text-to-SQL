@@ -1,0 +1,71 @@
+import { LogOut, Menu } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Outlet, useLocation, useNavigate } from 'react-router'
+import { Sidebar } from '@/components/backoffice/Sidebar'
+import { Button } from '@/components/ui/button'
+import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { useAuth } from '@/hooks/useAuth'
+
+/**
+ * Casca do backoffice: sidebar fixa no desktop, Sheet no mobile, topbar com a conta e a área de
+ * conteúdo rolável. A altura é definida (h-dvh) para o chat preencher o espaço sem rolagem dupla.
+ */
+export function BackofficeLayout() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const [open, setOpen] = useState(false)
+  const mainRef = useRef<HTMLElement>(null)
+
+  // A rolagem é do <main>, não da janela: volta ao topo a cada troca de rota.
+  useEffect(() => {
+    mainRef.current?.scrollTo(0, 0)
+  }, [pathname])
+
+  async function signOut() {
+    await logout()
+    navigate('/login', { replace: true })
+  }
+
+  return (
+    <div className="flex h-dvh overflow-hidden bg-background">
+      <aside className="hidden w-60 shrink-0 border-r border-border lg:block">
+        <Sidebar />
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
+          <div className="flex items-center gap-2">
+            <Sheet open={open} onOpenChange={setOpen}>
+              <SheetTrigger asChild>
+                <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Abrir menu">
+                  <Menu />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-64 p-0 sm:max-w-64">
+                <SheetTitle className="sr-only">Menu do backoffice</SheetTitle>
+                <SheetDescription className="sr-only">Navegação entre as telas do backoffice.</SheetDescription>
+                <Sidebar onNavigate={() => setOpen(false)} />
+              </SheetContent>
+            </Sheet>
+            <span className="eyebrow text-muted-foreground">Backoffice</span>
+          </div>
+
+          <div className="flex min-w-0 items-center gap-1 sm:gap-3">
+            <span className="hidden max-w-[16rem] truncate text-xs text-muted-foreground md:inline" title={user?.email}>
+              {user?.email}
+            </span>
+            <Button variant="outline" size="sm" onClick={signOut}>
+              <LogOut aria-hidden="true" />
+              Sair
+            </Button>
+          </div>
+        </header>
+
+        <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  )
+}

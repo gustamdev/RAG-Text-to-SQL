@@ -19,9 +19,9 @@ def test_password_hash_roundtrip():
 
 def test_token_tamper_and_garbage_rejected():
     token = create_access_token("u1", "admin")
-    assert decode_access_token(token)["sub"] == "u1"
-    assert decode_access_token(token[:-2] + "xx") is None
-    assert decode_access_token("lixo") is None
+    assert decode_access_token(token, "admin")["sub"] == "u1"
+    assert decode_access_token(token[:-2] + "xx", "admin") is None
+    assert decode_access_token("lixo", "admin") is None
 
 
 def test_failure_limiter_blocks_and_resets():
@@ -32,6 +32,14 @@ def test_failure_limiter_blocks_and_resets():
     assert limiter.is_blocked("k")
     limiter.reset("k")
     assert not limiter.is_blocked("k")
+
+
+def test_failure_limiter_count():
+    limiter = FailureLimiter(max_failures=5, window_s=60)
+    assert limiter.count("k") == 0
+    limiter.register_failure("k")
+    limiter.register_failure("k")
+    assert limiter.count("k") == 2
 
 
 def test_failure_limiter_window_expires():
@@ -123,6 +131,36 @@ def test_login_rate_limited_after_repeated_failures(auth_db):
     # Mesmo a senha certa fica bloqueada durante a janela.
     good = auth_db.client.post(LOGIN, json={"email": "ana@teste.com", "password": "senha-forte-1"})
     assert good.status_code == 429
+
+
+def test_login_delay_per_email_grows_when_ip_changes_and_never_locks(monkeypatch):
+    import asyncio
+
+    from app.config import settings
+    from app.core.errors import Unauthorized
+    from app.schemas.auth import LoginRequest
+    from app.services import auth_service
+
+    class NoUsers:
+        async def get_by_email(self, _email):
+            return None
+
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(auth_service.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(settings, "LOGIN_FREE_ATTEMPTS_PER_EMAIL", 2)
+    monkeypatch.setattr(settings, "LOGIN_MAX_DELAY_S", 5)
+    limiter = FailureLimiter(max_failures=99, window_s=60)
+    body = LoginRequest(email="ana@teste.com", password="errada")
+
+    for i in range(7):  # um IP novo a cada tentativa: a chave email|ip nunca enche
+        with pytest.raises(Unauthorized):  # sempre 401, nunca 429: a conta não é trancada
+            asyncio.run(auth_service.login(NoUsers(), limiter, body, f"10.0.0.{i}"))
+
+    assert delays == [1, 2, 4, 5, 5]  # 2 grátis, depois dobra até o teto
 
 
 @pytest.mark.parametrize(

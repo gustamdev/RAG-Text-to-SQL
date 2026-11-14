@@ -36,6 +36,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
+from app.core.pii import redact, redact_value
 from app.database.sql_engine import DIALECT
 from app.llm_models import SQLModel, TextModel, ValidationModel
 from app.prompts import (
@@ -310,7 +311,7 @@ def build_agent_graph(
                 {
                     "question": state["question"],
                     "columns": to_data(result.columns),
-                    "rows": to_data(result.rows[:ANSWER_SAMPLE_ROWS]),
+                    "rows": to_data([[redact_value(c) for c in row] for row in result.rows[:ANSWER_SAMPLE_ROWS]]),
                     "truncated": to_data(result.truncated),
                 }
             )
@@ -378,4 +379,4 @@ def build_agent_graph(
 
 async def answer_question(graph: CompiledStateGraph, question: str) -> AgentState:
     """Ponto de entrada único: roda o grafo até o fim e devolve o estado final (inclui `answer`)."""
-    return await graph.ainvoke({"question": question, "attempts": 0})
+    return await graph.ainvoke({"question": redact(question), "attempts": 0})

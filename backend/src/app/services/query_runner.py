@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 import duckdb
 from langsmith import traceable
 
+from app.core.pii import redact
 from app.database.sql_engine import DIALECT, EngineUnavailable, QueryTimeout, SQLEngine
 from app.schemas.query import QueryRequest, QueryResult, QueryStatus
 from app.sql_guard import UnsafeQueryError, validate_read_only_sql
@@ -82,7 +83,7 @@ class QueryRunner:
                 request.sql, DIALECT, max_rows=request.max_rows + 1, allowed_tables=self.engine.tables
             )
         except UnsafeQueryError as exc:
-            logger.warning("Consulta rejeitada (%s): %.200s", exc, request.sql)
+            logger.warning("Consulta rejeitada (%s): %.200s", exc, redact(request.sql))
             return finish("rejected", request.sql, _short_error(exc))
 
         try:

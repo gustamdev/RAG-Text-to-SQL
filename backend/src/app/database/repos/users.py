@@ -26,5 +26,9 @@ class UserRepo:
     async def promote_to_admin(self, user_id: str) -> None:
         await self.col.update_one({"_id": user_id}, {"$set": {"role": "admin"}})
 
+    async def bump_token_version(self, user_id: str) -> None:
+        """Invalida todos os tokens já emitidos para o usuário (logout/revogação)."""
+        await self.col.update_one({"_id": user_id}, {"$inc": {"token_version": 1}})
+
     async def count(self) -> int:
         return await self.col.count_documents({})

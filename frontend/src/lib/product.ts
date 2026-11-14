@@ -6,7 +6,6 @@ export function categoryLabel(category: string | null | undefined): string {
 }
 
 export const productHref = (id: string) => `/produtos/${encodeURIComponent(id)}`
-export const backofficeProductHref = (id: string) => `/backoffice/produtos/${encodeURIComponent(id)}`
 
 /** Link do catálogo já filtrado por categoria. */
 export const categoryHref = (category: string) => `/produtos?category=${encodeURIComponent(category)}`

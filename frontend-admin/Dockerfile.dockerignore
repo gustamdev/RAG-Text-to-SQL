@@ -1,0 +1,6 @@
+.git
+backend
+docs
+**/node_modules
+**/dist
+**/*.local

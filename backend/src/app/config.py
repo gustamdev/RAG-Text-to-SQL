@@ -2,6 +2,7 @@ import logging
 import os
 import secrets
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,7 +17,7 @@ _ENV_FILE = BACKEND_DIR / ".env.local" if (BACKEND_DIR / ".env.local").exists() 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
 
-    ENV: str = "local"
+    ENV: Literal["local", "dev", "prod"] = "local"
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     CORS_EXTRA_ORIGINS: str = ""
@@ -30,6 +31,10 @@ class Settings(BaseSettings):
     JWT_SECRET: SecretStr = SecretStr("")
     JWT_EXPIRE_MINUTES: int = 60 * 12
     LOGIN_MAX_FAILURES: int = 5
+    # Por e-mail (qualquer IP): após N tentativas na janela, cada nova espera 1s, 2s, 4s... até o teto.
+    # Freia força bruta distribuída sem trancar o admin legítimo.
+    LOGIN_FREE_ATTEMPTS_PER_EMAIL: int = 5
+    LOGIN_MAX_DELAY_S: float = 10
     LOGIN_WINDOW_S: float = 900
 
     OLIST_BASE_URL: str = "https://raw.githubusercontent.com/gustamdev/Olist-E-Commerce-Public-Dataset-2017-2018/main"
@@ -40,6 +45,7 @@ class Settings(BaseSettings):
     # Vazio = BACKEND_DIR/data/olist.duckdb
     DUCKDB_PATH: str = ""
     SQL_QUERY_TIMEOUT_S: float = 15
+    SNAPSHOT_DEBOUNCE_S: float = 3  # espera antes de reconstruir o snapshot do agente após um pedido pago
     SQL_MAX_CONCURRENT: int = 4
     QUERY_RESULT_TTL_S: float = 900
     QUERY_RESULT_MAX: int = 200
@@ -77,6 +83,28 @@ class Settings(BaseSettings):
     LANGSMITH_PROJECT: str = "rag-backend"
     LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"
 
+    # Loja simulada. Segredos vazios fora de prod viram valores efêmeros (ver _ensure_shop_secrets).
+    MAIL_BACKEND: Literal["console", "smtp"] = "console"
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: SecretStr = SecretStr("")
+    SMTP_FROM: str = ""
+    OTP_TTL_S: int = 300
+    OTP_MAX_ATTEMPTS: int = 5
+    OTP_RESEND_COOLDOWN_S: int = 60
+    OTP_MAX_SENDS_PER_HOUR: int = 3
+    OTP_PEPPER: SecretStr = SecretStr("")
+    PSEUDONYM_KEY: SecretStr = SecretStr("")
+    SHOP_MAX_ADDRESSES: int = 3
+    SHOP_CART_MAX_ITEMS: int = 50
+    SHOP_CART_MAX_QTY: int = 10
+    SHOP_CART_TTL_DAYS: int = 30
+    SHOP_ORIGIN_ZIP_PREFIX: str = "01310"
+    SHOP_FREE_STOCK_DEFAULT: int = 50
+    # Nº de workers do servidor: segredos efêmeros diferem por processo e quebram OTP/pseudônimos.
+    WEB_CONCURRENCY: int = 1
+
     @field_validator("SEED_YEAR", mode="before")
     @classmethod
     def _empty_seed_year_means_all(cls, value: object) -> object:
@@ -93,6 +121,30 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET é obrigatório quando ENV=prod.")
         logging.getLogger(__name__).warning("JWT_SECRET vazio: usando segredo efêmero (tokens expiram no restart).")
         self.JWT_SECRET = SecretStr(secrets.token_urlsafe(48))
+        return self
+
+    @model_validator(mode="after")
+    def _ensure_shop_secrets(self) -> "Settings":
+        if self.ENV == "prod" and self.MAIL_BACKEND == "console":
+            raise ValueError("MAIL_BACKEND=console não é permitido quando ENV=prod (use smtp).")
+        if self.MAIL_BACKEND == "smtp":
+            missing = [n for n in ("SMTP_HOST", "SMTP_FROM", "SMTP_USER") if not getattr(self, n).strip()]
+            if missing:
+                raise ValueError(f"MAIL_BACKEND=smtp exige {', '.join(missing)}.")
+        for name in ("OTP_PEPPER", "PSEUDONYM_KEY"):
+            value = getattr(self, name).get_secret_value()
+            if self.ENV == "prod":
+                if len(value) < 32:
+                    raise ValueError(f"{name} é obrigatório com ao menos 32 caracteres quando ENV=prod.")
+            elif not value:
+                logging.getLogger(__name__).warning("%s vazio: usando valor efêmero (muda a cada restart).", name)
+                if self.WEB_CONCURRENCY > 1:
+                    logging.getLogger(__name__).warning(
+                        "%s efêmero com WEB_CONCURRENCY=%d: cada worker terá um valor diferente.",
+                        name,
+                        self.WEB_CONCURRENCY,
+                    )
+                setattr(self, name, SecretStr(secrets.token_urlsafe(48)))
         return self
 
     @property

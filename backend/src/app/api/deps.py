@@ -5,7 +5,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pymongo.asynchronous.database import AsyncDatabase
 
-from app.auth.security import decode_access_token
+from app.auth.security import AUD_ADMIN, decode_access_token
 from app.config import settings
 from app.core.errors import Forbidden, ServiceUnavailable, TooManyRequests, Unauthorized
 from app.core.rate_limit import FailureLimiter, SlidingWindowLimiter
@@ -16,6 +16,7 @@ from app.schemas.common import Role
 from app.services.agent_runner import AgentRunner
 from app.services.product_analytics import ProductAnalytics
 from app.services.query_runner import QueryRunner
+from app.services.snapshot import SnapshotService
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -30,6 +31,13 @@ def get_query_runner(request: Request) -> QueryRunner:
 
 def get_agent_runner(request: Request) -> AgentRunner:
     return request.app.state.agent_runner
+
+
+def get_snapshot_service(request: Request) -> SnapshotService:
+    service = getattr(request.app.state, "snapshot_service", None)
+    if service is None:
+        raise ServiceUnavailable("Atualização do snapshot indisponível no momento.")
+    return service
 
 
 def get_sql_engine(request: Request) -> SQLEngine:
@@ -99,11 +107,12 @@ async def get_optional_user(
     """Usuário do token, se houver e for válido. O papel vem do banco, não do token."""
     if credentials is None:
         return None
-    claims = decode_access_token(credentials.credentials)
+    claims = decode_access_token(credentials.credentials, AUD_ADMIN)
     if claims is None:
         raise Unauthorized("Sessão inválida ou expirada. Entre novamente.")
     user = await repos.users.get(claims["sub"])
-    if user is None:
+    # tv ausente/diferente = token revogado (logout) ou emitido antes da revogação.
+    if user is None or claims.get("tv") != user.get("token_version", 0):
         raise Unauthorized("Sessão inválida ou expirada. Entre novamente.")
     return user
 

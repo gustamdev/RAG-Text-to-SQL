@@ -1,7 +1,6 @@
-// Cliente HTTP único do Olist Insights: base /api/v1 (proxy do Vite em dev), JWT Bearer e erros tipados.
+// Cliente HTTP único do Olist Insights: base /api/v1 (proxy do Vite em dev), e erros tipados.
 
 export const API_BASE = '/api/v1'
-const TOKEN_KEY = 'olist.token'
 
 export class ApiError extends Error {
   readonly status: number
@@ -11,47 +10,6 @@ export class ApiError extends Error {
     this.name = 'ApiError'
     this.status = status
   }
-}
-
-// localStorage pode lançar (modo privado, quota): a sessão só fica em memória nesse caso.
-let memoryToken: string | null = null
-
-export const tokenStore = {
-  get(): string | null {
-    try {
-      return localStorage.getItem(TOKEN_KEY) ?? memoryToken
-    } catch {
-      return memoryToken
-    }
-  },
-  set(token: string) {
-    memoryToken = token
-    try {
-      localStorage.setItem(TOKEN_KEY, token)
-    } catch {
-      /* sessão só em memória */
-    }
-  },
-  clear() {
-    memoryToken = null
-    try {
-      localStorage.removeItem(TOKEN_KEY)
-    } catch {
-      /* nada a limpar */
-    }
-  },
-}
-
-let onUnauthorized: (() => void) | null = null
-
-/** O AuthProvider registra aqui o que fazer quando o servidor recusa a sessão (token expirado). */
-export function setUnauthorizedHandler(handler: (() => void) | null) {
-  onUnauthorized = handler
-}
-
-/** Para chamadas fora do `api` (ex.: stream SSE) avisarem que o servidor recusou o token. */
-export function notifyUnauthorized() {
-  onUnauthorized?.()
 }
 
 type Params = Record<string, string | number | undefined | null>
@@ -80,7 +38,6 @@ export function messageFrom(status: number, payload: unknown): string {
     if (typeof msg === 'string' && msg.startsWith('Value error, ')) return msg.slice('Value error, '.length)
     return 'Verifique os dados informados.'
   }
-  if (status === 401) return 'Entre no backoffice para continuar.'
   if (status === 403) return 'Você não tem permissão para esta ação.'
   if (status >= 500) return 'Erro no servidor. Tente novamente em instantes.'
   return 'Não foi possível concluir a solicitação.'
@@ -89,8 +46,6 @@ export function messageFrom(status: number, payload: unknown): string {
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, params, signal } = options
   const headers: Record<string, string> = {}
-  const token = tokenStore.get()
-  if (token) headers['Authorization'] = `Bearer ${token}`
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
   let response: Response
@@ -114,8 +69,6 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   }
 
   if (!response.ok) {
-    // 401 com token enviado = sessão expirada/revogada. Sem token (ex.: senha errada) é só erro de formulário.
-    if (response.status === 401 && token) onUnauthorized?.()
     throw new ApiError(response.status, messageFrom(response.status, payload))
   }
   return payload as T

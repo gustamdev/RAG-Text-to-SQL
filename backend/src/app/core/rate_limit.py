@@ -21,8 +21,11 @@ class FailureLimiter:
             return deque()
         return events
 
+    def count(self, key: str) -> int:
+        return len(self._prune(key, time.monotonic()))
+
     def is_blocked(self, key: str) -> bool:
-        return len(self._prune(key, time.monotonic())) >= self.max_failures
+        return self.count(key) >= self.max_failures
 
     def register_failure(self, key: str) -> None:
         if len(self._failures) >= self.max_keys and key not in self._failures:

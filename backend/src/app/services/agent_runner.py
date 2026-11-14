@@ -12,6 +12,7 @@ import uuid
 
 from langgraph.graph.state import CompiledStateGraph
 
+from app.core.pii import redact
 from app.prompts import SQLAgentOutput
 from app.schemas.chat import AgentEvent
 from app.schemas.query import QueryResult
@@ -66,6 +67,8 @@ def _describe(node: str, update: dict | None) -> AgentEvent:
         else:
             detail = f"{result.status}: {result.error}"
 
+    if detail:
+        detail = redact(detail)
     if detail and len(detail) > MAX_DETAIL_CHARS:
         detail = detail[:MAX_DETAIL_CHARS] + "…"
 
@@ -148,6 +151,7 @@ class AgentRunner:
             "tags": ["chat"],
             "metadata": {"question_id": question_id, "session_id": session_id},
         }
+        question = redact(question)  # e-mail/CEP digitados não chegam ao LLM, ao log nem à memória
         answer: str | None = None
         tool_notes: dict[str, str] = {}
         try:

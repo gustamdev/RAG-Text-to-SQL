@@ -3,7 +3,8 @@
 #
 # Stack completa em containers (perfil "full"):
 #   docker compose --profile full up --build
-# Requer backend/.env com OPENAI_API_KEY e JWT_SECRET (32+ caracteres). O seed baixa o dataset Olist no primeiro start.
+# Requer backend/.env com: JWT_SECRET, OPENAI_API_KEY, MAIL_BACKEND=smtp (+ SMTP_HOST, SMTP_FROM, SMTP_USER,
+# SMTP_PASSWORD), OTP_PEPPER e PSEUDONYM_KEY (JWT_SECRET, OTP_PEPPER e PSEUDONYM_KEY com 32+ caracteres). O seed baixa o dataset Olist no primeiro start.
 # Crie o admin: docker compose exec backend python scripts/create_admin.py voce@email.com "Seu Nome"
 
 services:
@@ -28,6 +29,8 @@ services:
       - ./backend/.env
     environment:
       ENV: prod
+      # Só o nginx (loja e admin), na sub-rede fixa abaixo, pode informar o IP real do cliente.
+      FORWARDED_ALLOW_IPS: 172.28.0.0/16
       MONGO_URI: mongodb://mongo:27017
       MONGO_AUTOSTART: "false"
       DUCKDB_PATH: /app/data/olist.duckdb
@@ -44,6 +47,26 @@ services:
       - backend
     ports:
       - "8080:8080"
+
+  # Backoffice + assistente, fora da loja. Só localhost; em produção, atrás de VPN/allowlist de IP.
+  # Contexto = raiz do repo: o admin importa components/ui e lib de ./frontend.
+  admin:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: frontend-admin/Dockerfile
+    container_name: olist-admin
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:8081:8081"
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
   mongo_data:

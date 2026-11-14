@@ -18,9 +18,6 @@ export function PublicLayout() {
             <NavLink to="/produtos" className={navLink}>
               Catálogo
             </NavLink>
-            <NavLink to="/backoffice" className={navLink}>
-              Backoffice
-            </NavLink>
           </nav>
         </div>
       </header>
