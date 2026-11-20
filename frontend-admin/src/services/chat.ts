@@ -1,4 +1,4 @@
-x`ximport { createSSEParser } from './sse'
+import { createSSEParser } from './sse'
 import type { AgentEvent, AskResponse, Feedback, ThreadDetail, ThreadSummary } from '../types/chat'
 import { API_BASE, ApiError, api, notifyUnauthorized, tokenStore } from './http'
 
