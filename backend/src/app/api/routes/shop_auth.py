@@ -1,12 +1,17 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 
-from app.api.deps import enforce_public_rate_limit
-from app.api.shop_deps import get_current_customer, get_shop_auth_service
+from app.api.deps import enforce_auth_rate_limit
+from app.api.shop_deps import get_limited_customer, get_shop_auth_service
+from app.core.rate_limit import ip_key
 from app.schemas.shop_auth import (
     CustomerOut,
     DetailOut,
+    ForgotPasswordOut,
+    ForgotPasswordRequest,
     MfaRequiredOut,
+    OkOut,
     ResendOtpRequest,
+    ResetPasswordRequest,
     ShopLoginRequest,
     ShopTokenResponse,
     SignupRequest,
@@ -15,11 +20,11 @@ from app.schemas.shop_auth import (
 from app.services.shop_auth_service import ShopAuthService, customer_out
 
 router = APIRouter(prefix="/shop/auth", tags=["shop-auth"])
-_public = [Depends(enforce_public_rate_limit)]
+_public = [Depends(enforce_auth_rate_limit)]
 
 
 def _ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    return ip_key(request.client.host) if request.client else "unknown"  # IPv6 = /64: limites OTP/login por rede
 
 
 @router.post("/signup", status_code=status.HTTP_202_ACCEPTED, response_model=DetailOut, dependencies=_public)
@@ -63,16 +68,38 @@ async def login_verify_otp(
     return await svc.verify_login(payload, _ip(request))
 
 
+@router.post(
+    "/forgot-password", status_code=status.HTTP_202_ACCEPTED, response_model=ForgotPasswordOut, dependencies=_public
+)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    bg: BackgroundTasks,
+    svc: ShopAuthService = Depends(get_shop_auth_service),
+) -> ForgotPasswordOut:
+    return ForgotPasswordOut(**await svc.forgot_password(payload, _ip(request), bg.add_task))
+
+
+@router.post("/reset-password", response_model=OkOut, dependencies=_public)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    bg: BackgroundTasks,
+    svc: ShopAuthService = Depends(get_shop_auth_service),
+) -> OkOut:
+    await svc.reset_password(payload, _ip(request), bg.add_task)
+    return OkOut()
+
+
 @router.get("/me", response_model=CustomerOut)
-async def me(customer: dict = Depends(get_current_customer)) -> CustomerOut:
+async def me(customer: dict = Depends(get_limited_customer)) -> CustomerOut:
     return customer_out(customer)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    request: Request,
-    customer: dict = Depends(get_current_customer),
+    customer: dict = Depends(get_limited_customer),
     svc: ShopAuthService = Depends(get_shop_auth_service),
 ) -> Response:
-    await svc.logout(customer, _ip(request))
+    await svc.logout(customer)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

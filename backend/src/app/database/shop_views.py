@@ -1,7 +1,7 @@
 """Views projetadas da loja para o agente (E7): ALLOWLIST de colunas, sem PII.
 
 O agente nunca lê `shop_*` bruto. Cada tabela abaixo é gravada no snapshot DuckDB a partir de uma
-projeção explícita: pseudônimo do cliente (HMAC), ids de pedido/produto, status, data no dia,
+projeção explícita: pseudônimo do cliente (HMAC), ids de pedido/produto, estoque do catálogo, status, data no dia,
 valores em centavos, categoria, UF e prefixo de CEP de 3 dígitos, bandeira do cartão. Fora da lista
 nada passa: nome, apelido, e-mail, endereço textual, últimos 4 e texto livre não têm coluna.
 Todo valor é validado por regex/enum e vira NULL se não casar (defesa contra texto digitado).
@@ -36,6 +36,10 @@ VIEW_COLUMNS: dict[str, dict[str, str]] = {
         "shipping_option": "VARCHAR",
         "destination_state": "VARCHAR",
         "destination_zip3": "VARCHAR",
+        "canceled_date": "DATE",
+        "cancel_reason": "VARCHAR",
+        "canceled_from_status": "VARCHAR",
+        "refund_cents": "BIGINT",
     },
     "shop_order_items_view": {
         "order_id": "VARCHAR",
@@ -55,6 +59,15 @@ VIEW_COLUMNS: dict[str, dict[str, str]] = {
         "installments": "INTEGER",
         "amount_cents": "BIGINT",
         "payment_date": "DATE",
+        "refund_cents": "BIGINT",
+    },
+    "shop_products_view": {
+        "product_id": "VARCHAR",
+        "title": "VARCHAR",
+        "category": "VARCHAR",
+        "price_cents": "BIGINT",
+        "stock": "INTEGER",
+        "in_stock": "BOOLEAN",
     },
     "shop_customers_view": {
         "customer_pseudo": "VARCHAR",
@@ -69,9 +82,12 @@ assert set(VIEW_COLUMNS) == SHOP_VIEW_TABLES
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _SLUG = re.compile(r"[a-z0-9_]{1,80}")
 _UF = re.compile(r"[A-Z]{2}")
-_ZIP3 = re.compile(r"\d{3}")
+_ZIP3 = re.compile(r"[0-9]{3}")
 _ORDER_STATES = {"created", "paid", "refused", "shipped", "delivered", "canceled"}
-_PAYMENT_STATES = {"approved", "refused", "timeout"}
+_PAYMENT_STATES = {"approved", "refused", "timeout", "refunded"}
+_CANCEL_REASONS = {"changed_mind", "found_cheaper", "wrong_item", "delivery_too_long", "other", "expired"}
+_CANCEL_REASONS |= {"account_deleted"}
+_CANCELED_FROM = {"created", "refused", "paid"}
 _SHIPPING = {"standard", "economy"}
 
 
@@ -122,6 +138,10 @@ def _order_row(doc: dict, deleted: set[str]) -> tuple:
         _enum(_SHIPPING, shipping.get("option")),
         _match(_UF, address.get("state")),
         _zip3(address.get("zip")),
+        _day(doc.get("canceled_at")),
+        _enum(_CANCEL_REASONS, doc.get("cancel_reason")),
+        _enum(_CANCELED_FROM, doc.get("canceled_from")),
+        _int(doc.get("refund_cents")),
     )
 
 
@@ -148,6 +168,20 @@ def _payment_row(doc: dict, deleted: set[str]) -> tuple:
         _int(doc.get("installments")),
         _int(doc.get("amount_cents")),
         _day(doc.get("created_at")),
+        _int((doc.get("refund") or {}).get("amount_cents")),
+    )
+
+
+def _product_row(doc: dict) -> tuple:
+    title = doc.get("title")
+    stock = max(_int(doc.get("stock")) or 0, 0)
+    return (
+        _match(_ID, doc.get("product_id")),
+        title.strip()[:200] or None if isinstance(title, str) else None,  # título do catálogo (derivado da categoria)
+        _match(_SLUG, doc.get("category")),
+        _int(doc.get("price_cents")),
+        stock,
+        stock > 0,
     )
 
 
@@ -179,6 +213,7 @@ def write_shop_views(db: Database, con: duckdb.DuckDBPyConnection) -> dict[str, 
 
     order_fields = ["order_id", "customer_id", "state", "created_at", "items", "subtotal_cents", "freight_cents"]
     order_fields += ["discount_cents", "total_cents", "shipping.option", "address.state", "address.zip"]
+    order_fields += ["canceled_at", "cancel_reason", "canceled_from", "refund_cents"]
     counts: dict[str, int] = {}
 
     def orders() -> Iterator[dict]:
@@ -192,7 +227,19 @@ def write_shop_views(db: Database, con: duckdb.DuckDBPyConnection) -> dict[str, 
     counts["shop_payments_view"] = _insert(
         con,
         "shop_payments_view",
-        (_payment_row(d, deleted) for d in _stream(db, "shop_payments", payment_fields + ["created_at"])),
+        (
+            _payment_row(d, deleted)
+            for d in _stream(db, "shop_payments", payment_fields + ["created_at", "refund.amount_cents"])
+        ),
+    )
+
+    counts["shop_products_view"] = _insert(
+        con,
+        "shop_products_view",
+        (
+            _product_row(d)
+            for d in _stream(db, "shop_products", ["product_id", "title", "category", "price_cents", "stock"])
+        ),
     )
 
     # UF/zip3 do endereço padrão (ou do primeiro): só o necessário é lido, o texto do endereço nunca sai daqui.

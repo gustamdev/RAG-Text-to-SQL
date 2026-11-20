@@ -6,6 +6,13 @@
 .env.*
 !.env.example
 
+# Config local do Claude Code
+.claude/settings.local.json
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+
 # Documentação gerada (knowledge-architect)
 knowledge/
 

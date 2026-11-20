@@ -89,7 +89,7 @@ def test_slow_query_times_out(engine):
     engine.open()
     runner = QueryRunner(engine, ttl_s=60, max_results=10)
 
-    result = run(runner, "select sum(a.n * b.n * c.n) from nums a, nums b, nums c")
+    result = run(runner, "select sum(a.n * b.n * c.n) from nums a join nums b on true join nums c on true")
 
     assert result.status == "timeout"
 

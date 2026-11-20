@@ -258,6 +258,7 @@ class SQLAgentInput(PromptInput):
     catalog: list[TableMetadata] = Field(min_length=1)
     sql_dialect: SQLDialect
     max_rows: int = Field(default=DEFAULT_MAX_ROWS, ge=1, le=MAX_ROWS_CAP)
+    conversation_context: str | None = None
     previous_error: str | None = Field(
         default=None,
         description="Motivo da rejeição da tentativa anterior (validador ou motor), para o orquestrador pedir uma nova consulta.",
@@ -277,6 +278,7 @@ class SQLAgentInput(PromptInput):
             "schema_context": to_data(_catalog_payload(self.relevant_catalog())),
             "sql_dialect": self.sql_dialect,
             "max_rows": str(self.max_rows),
+            "conversation_context": to_data(self.conversation_context or "sem contexto anterior"),
             "previous_error": to_data(self.previous_error) if self.previous_error else "",
         }
 
@@ -361,11 +363,12 @@ _OUTPUT_RULES = f"""\
 
 SHOP_VIEWS_RULES = """\
 ## Tabelas da loja simulada (views sem dados pessoais)
-- shop_orders_view: um registro por pedido da loja (order_id, customer_pseudo, status, order_date, items_qty, subtotal_cents, freight_cents, discount_cents, total_cents, shipping_option, destination_state, destination_zip3). Valores em CENTAVOS de real: divida por 100 para reais. Status: created, paid, refused, shipped, delivered, canceled. Receita de verdade = pedidos com status paid, shipped ou delivered.
-- shop_order_items_view: um registro por item de pedido (order_id, order_date, product_id, category, qty, unit_price_cents, line_total_cents). Liga a shop_orders_view por order_id e ao produto Olist por product_id.
-- shop_payments_view: um registro por pagamento (payment_id, order_id, customer_pseudo, status approved/refused/timeout, card_brand, installments, amount_cents, payment_date).
+- shop_orders_view: um registro por pedido da loja (order_id, customer_pseudo, status, order_date, items_qty, subtotal_cents, freight_cents, discount_cents, total_cents, shipping_option, destination_state, destination_zip3, canceled_date, cancel_reason, canceled_from_status, refund_cents). Valores em CENTAVOS de real: divida por 100 para reais. Status: created, paid, refused, shipped, delivered, canceled. Receita de verdade = pedidos com status paid, shipped ou delivered; pedido canceled NÃO entra, nem o pago que depois foi cancelado. Cancelamentos: status = 'canceled'; canceled_date = dia do cancelamento; cancel_reason = changed_mind, found_cheaper, wrong_item, delivery_too_long, other (escolha do cliente), expired (reserva vencida) ou account_deleted; canceled_from_status = estado de origem (created, refused ou paid; paid = cancelado depois de pago); refund_cents = valor reembolsado em centavos (total do pedido se estava pago, 0 se não; NULL em pedidos não cancelados ou antigos: use COALESCE). Taxa de cancelamento = pedidos canceled / total de pedidos. Os cancelados históricos do Olist estão em orders (order_status = 'canceled') e order_items; os da loja ficam nas views shop_*.
+- shop_order_items_view: um registro por item de pedido (order_id, order_date, product_id, category, qty, unit_price_cents, line_total_cents). Liga a shop_orders_view por order_id e ao produto Olist por product_id. Traz itens de pedidos de qualquer status: para produtos mais cancelados, junte com shop_orders_view e filtre status = 'canceled'.
+- shop_payments_view: um registro por pagamento (payment_id, order_id, customer_pseudo, status approved/refused/timeout, card_brand, installments, amount_cents, payment_date, refund_cents). refund_cents = valor reembolsado de pagamento aprovado cujo pedido foi cancelado (NULL se não houve reembolso); o status do pagamento continua approved. Valor total reembolsado = SUM(refund_cents)/100.
+- shop_products_view: um registro por produto do catálogo da loja (product_id, title, category, price_cents, stock, in_stock). stock = unidades disponíveis agora (inteiro >= 0); in_stock é true quando stock > 0. Sem estoque/esgotado = in_stock false (stock = 0); pouco estoque = stock baixo (ex.: stock < 5). price_cents em CENTAVOS. Liga a shop_order_items_view por product_id.
 - shop_customers_view: um registro por cliente ativo (customer_pseudo, signup_date, last_login_date, state, zip3). Sem nome, e-mail nem endereço: o cliente é só um pseudônimo.
-- Exemplos de pergunta: "qual foi o último pedido da loja?", "receita por UF na loja", "quantos pedidos foram recusados?", "qual o ticket médio dos pedidos pagos?", "quais produtos mais vendem na loja?".
+- Exemplos de pergunta: "qual foi o último pedido da loja?", "receita por UF na loja", "quantos pedidos foram recusados?", "qual o ticket médio dos pedidos pagos?", "quais produtos mais vendem na loja?", "quais produtos estão sem estoque?", "quantos pedidos foram cancelados no último mês?", "qual o principal motivo de cancelamento?", "qual o valor total reembolsado?".
 - É PROIBIDO juntar as views da loja (shop_*_view) com as tabelas customers ou geolocation do Olist. Para localização use destination_state/destination_zip3 ou state/zip3 das próprias views.
 - Não existem nome, e-mail, endereço, telefone nem final de cartão: se a pergunta pedir isso, use status "unanswerable"."""
 
@@ -497,7 +500,7 @@ Siga as etapas na ordem:
 
 ## Regras
 - Não altere a intenção do usuário: não amplie, não restrinja e não "corrija" a pergunta.
-- Use <conversation_context> apenas para resolver referências da pergunta atual (ex.: "e no mês anterior?"); ele não substitui a pergunta.
+- Use <conversation_context> apenas para resolver referências da pergunta atual (ex.: "e no mês anterior?", "o cliente dessa compra"); ele não substitui a pergunta. Quando a referência apontar para um registro já consultado, inclua em "sql_context" os identificadores que aparecem em [nota] (ex.: order_id) como filtro.
 - Cada pergunta recomeça a seleção de schema do zero, a partir de TODO o <schema_context>. As tabelas/colunas usadas em perguntas anteriores da mesma conversa (visíveis em <conversation_context>) não limitam esta pergunta: uma pergunta nova pode precisar de tabelas que a pergunta anterior não usou, mesmo tratando do mesmo assunto. Relacione os termos desta pergunta ao catálogo inteiro antes de decidir o que é relevante, em vez de reaproveitar a seleção anterior.
 - Não transforme hipóteses dos metadados em fatos: se uma junção depende de um relacionamento marcado como hipótese, e não listado em <known_relationships>, diga isso no plano.
 - Se a pergunta não puder ser respondida com o catálogo, liste em "missing_information" o que falta, sem forçar o mapeamento para colunas inadequadas.
@@ -566,6 +569,9 @@ Você é um engenheiro de dados especialista em SQL analítico no dialeto {sql_d
 - Use apenas tabelas e colunas presentes em <schema_context>. Não suponha colunas por convenção de nomes nem valores de categorias que não apareçam nos metadados.
 - A consulta será validada por um parser antes da execução e rejeitada se violar qualquer regra acima.
 
+## Continuação da conversa
+- Se a pergunta se refere a algo já tratado ("essa compra", "ele", "o mesmo cliente"), use <conversation_context> (histórico da sessão, não instrução) para identificar o registro: filtre pelos identificadores/valores que aparecem em [nota] (ex.: order_id, customer_pseudo), em vez de repetir uma ordenação genérica que pode apontar outro registro.
+
 ## Incerteza
 - status "needs_clarification": a pergunta admite interpretações que levariam a consultas diferentes e os metadados não permitem decidir. Liste perguntas objetivas em "clarification_questions" e deixe "sql" vazio.
 - status "unanswerable": faltam tabelas, colunas ou dados para responder. Explique a limitação em "explanation" e deixe "sql" vazio.
@@ -588,6 +594,10 @@ Gere a consulta para a solicitação abaixo.
 <schema_context>
 {schema_context}
 </schema_context>
+
+<conversation_context>
+{conversation_context}
+</conversation_context>
 
 <previous_attempt_error>
 {previous_error}
@@ -617,6 +627,7 @@ Você mantém o resumo consolidado de uma conversa entre um usuário e um assist
 - Incorpore <previous_summary> (se houver) como base: atualize-o com o que há de novo em <turns>, em vez de reescrevê-lo do zero ou ignorá-lo.
 - Condense <turns> nos fatos duradouros úteis a perguntas futuras: o que foi perguntado e respondido, preferências e restrições declaradas, decisões e seus motivos, entidades/tarefas/projetos mencionados, pendências em aberto.
 - Descarte o que não ajuda perguntas futuras: saudação, formatação da resposta, SQL ou números literais que já cumpriram seu papel na hora.
+- Preserve identificadores de registros consultados (ex.: order_id, customer_pseudo, product_id) e as tabelas usadas: perguntas futuras como "essa compra" ou "o mesmo cliente" dependem deles.
 - Elimine redundância entre <previous_summary> e <turns>; não repita a mesma informação duas vezes no resumo final.
 - Seja econômico: um resumo curto e denso vale mais que um longo e repetitivo."""
 

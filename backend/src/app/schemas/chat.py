@@ -34,3 +34,20 @@ class AgentEvent(BaseModel):
     detail: str | None = None
     done: bool = False
     answer: str | None = None
+
+
+class ThreadSummary(BaseModel):
+    session_id: str
+    title: str
+    updated_at: str
+
+
+class ThreadMessage(BaseModel):
+    question_id: str
+    question: str
+    answer: str
+    steps: list[AgentEvent] = []
+
+
+class ThreadDetail(ThreadSummary):
+    messages: list[ThreadMessage]

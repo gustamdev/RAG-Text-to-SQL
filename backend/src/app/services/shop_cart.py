@@ -12,6 +12,8 @@ NO_STOCK = "Produto sem estoque suficiente."
 LIMIT = "Limite de itens do carrinho atingido."
 NOT_IN_CART = "Item não está no carrinho."
 GONE = "Produto indisponível. Remova do carrinho."
+BUSY = "Carrinho em uso em outra aba. Tente de novo."
+MAX_RETRIES = 5
 
 
 def _view(line: dict, product: dict | None) -> CartLine:
@@ -60,9 +62,17 @@ class ShopCart:
         doc, items = await self._load(customer_id)
         return await self._render(doc, items)
 
-    async def _save_render(self, customer_id: str, items: list[dict]) -> CartOut:
-        await self.carts.save(customer_id, items)
-        return await self.get(customer_id)
+    async def _mutate(self, customer_id: str, change) -> CartOut:
+        """Lê, aplica `change(items)` (síncrona; pode levantar) e grava com revisão; se outra requisição gravou
+        antes, relê e refaz. Cestas paralelas do mesmo cliente não perdem itens."""
+        for _ in range(MAX_RETRIES):
+            doc, items = await self._load(customer_id)
+            changed = change(items)
+            if changed is not None:  # [] é válido (removeu o último item); `or items` o descartava
+                items = changed
+            if await self.carts.save(customer_id, items, doc.get("rev", 0) if doc else None):
+                return await self.get(customer_id)
+        raise Conflict(BUSY)
 
     @staticmethod
     def _add(items: list[dict], product: dict, qty: int) -> None:
@@ -83,33 +93,35 @@ class ShopCart:
         product = await self.products.get(product_id)
         if product is None:
             raise NotFound("Produto não encontrado.")
-        _, items = await self._load(customer_id)
-        self._add(items, product, qty)
-        return await self._save_render(customer_id, items)
+        return await self._mutate(customer_id, lambda items: self._add(items, product, qty))
 
     async def patch(self, customer_id: str, product_id: str, qty: int | None, ack: bool | None) -> CartOut:
-        _, items = await self._load(customer_id)
-        line = next((i for i in items if i["product_id"] == product_id), None)
-        if line is None:
-            raise NotFound(NOT_IN_CART)
         product = await self.products.get(product_id)
-        if qty is not None:
-            if product is None or qty > product["stock"]:
-                raise Conflict(NO_STOCK)
-            line["qty"] = qty
-        if ack:
-            if product is None or product["stock"] < 1:
-                raise Conflict(GONE)
-            line["qty"] = min(line["qty"], product["stock"])
-            line["seen_price_cents"] = product["price_cents"]
-        return await self._save_render(customer_id, items)
+
+        def change(items: list[dict]) -> None:
+            line = next((i for i in items if i["product_id"] == product_id), None)
+            if line is None:
+                raise NotFound(NOT_IN_CART)
+            if qty is not None:
+                if product is None or qty > product["stock"]:
+                    raise Conflict(NO_STOCK)
+                line["qty"] = qty
+            if ack:
+                if product is None or product["stock"] < 1:
+                    raise Conflict(GONE)
+                line["qty"] = min(line["qty"], product["stock"])
+                line["seen_price_cents"] = product["price_cents"]
+
+        return await self._mutate(customer_id, change)
 
     async def remove(self, customer_id: str, product_id: str) -> CartOut:
-        _, items = await self._load(customer_id)
-        kept = [i for i in items if i["product_id"] != product_id]
-        if len(kept) == len(items):
-            raise NotFound(NOT_IN_CART)
-        return await self._save_render(customer_id, kept)
+        def change(items: list[dict]) -> list[dict]:
+            kept = [i for i in items if i["product_id"] != product_id]
+            if len(kept) == len(items):
+                raise NotFound(NOT_IN_CART)
+            return kept
+
+        return await self._mutate(customer_id, change)
 
     async def clear(self, customer_id: str) -> CartOut:
         await self.carts.clear(customer_id)
@@ -117,15 +129,17 @@ class ShopCart:
 
     async def merge(self, customer_id: str, guest: list[tuple[str, int]]) -> CartOut:
         """Itens inválidos, sem estoque ou além dos limites são ignorados (não falha a requisição)."""
-        _, items = await self._load(customer_id)
         found = {p["product_id"]: p for p in await self.products.get_many([pid for pid, _ in guest])}
-        for pid, qty in guest:
-            if pid in found and qty >= 1:
-                try:
-                    self._add(items, found[pid], qty)
-                except Conflict:
-                    continue
-        return await self._save_render(customer_id, items)
+
+        def change(items: list[dict]) -> None:
+            for pid, qty in guest:
+                if pid in found and qty >= 1:
+                    try:
+                        self._add(items, found[pid], qty)
+                    except Conflict:
+                        continue
+
+        return await self._mutate(customer_id, change)
 
     async def weight_g(self, customer_id: str) -> float | None:
         """Peso total do carrinho (None = vazio). Produto sem peso conta DEFAULT_WEIGHT_G."""

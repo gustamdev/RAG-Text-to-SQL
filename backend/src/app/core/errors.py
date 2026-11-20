@@ -32,6 +32,10 @@ class Conflict(DomainError):
     status_code = 409
 
 
+class UnprocessableEntity(DomainError):
+    status_code = 422
+
+
 class TooManyRequests(DomainError):
     status_code = 429
 

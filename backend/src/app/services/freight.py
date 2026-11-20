@@ -15,6 +15,7 @@ from app.config import settings
 from app.core.errors import DomainError, ServiceUnavailable
 from app.database.repos.geolocation import GeolocationRepo
 from app.schemas.shop_store import FreightOption
+from app.services.zip_lookup import ZipRemote, zip_remote
 
 EARTH_KM = 6371.0
 BASE_CENTS = 1500
@@ -65,12 +66,13 @@ def quote(distance_km: float, weight_g: float) -> list[FreightOption]:
 
 
 class FreightService:
-    def __init__(self, geo: GeolocationRepo):
-        self.geo = geo
+    def __init__(self, geo: GeolocationRepo, remote: ZipRemote = zip_remote):
+        self.geo, self.remote = geo, remote
 
     async def options(self, zip8: str, weight_g: float, state: str | None = None) -> list[FreightOption]:
         """InvalidZip (422) se o CEP não tem coordenada e não há UF para o fallback."""
-        dest = await self.geo.coords(zip8[:5])
+        real = await self.remote.fetch(zip8)  # lat/lng do CEP real; sem ele (ou offline) cai no prefixo
+        dest = (real.lat, real.lng) if real and real.lat is not None else await self.geo.coords(zip8[:5])
         if dest is not None:
             origin = await self.geo.coords(settings.SHOP_ORIGIN_ZIP_PREFIX)
             if origin is None:

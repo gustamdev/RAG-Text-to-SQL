@@ -49,3 +49,11 @@ export function LoadingBlock({ label = 'Carregando…' }: { label?: string }) {
     </div>
   )
 }
+
+export function InlineError({ id, children }: { id?: string; children: React.ReactNode }) {
+  return (
+    <p id={id} role="alert" className="mt-1 text-sm font-medium text-destructive">
+      {children}
+    </p>
+  )
+}

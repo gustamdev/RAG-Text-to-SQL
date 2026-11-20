@@ -5,7 +5,8 @@ from typing import Any
 
 REDACTED = "[redigido]"
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-_CEP = re.compile(r"(?<!\d)\d{5}-?\d{3}(?!\d)")  # shortcut: qualquer número de 8 dígitos em texto também é mascarado
+# shortcut: qualquer número de 8 dígitos em texto também é mascarado
+_CEP = re.compile(r"(?<![0-9])[0-9]{5}-?[0-9]{3}(?![0-9])")
 
 
 def redact(text: str) -> str:

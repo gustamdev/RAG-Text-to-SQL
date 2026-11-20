@@ -3,11 +3,15 @@ EXPECTED_ROUTES = {
     ("GET", "/docs/oauth2-redirect"),
     ("GET", "/api/v1/health"),
     ("GET", "/openapi.json"),
+    ("GET", "/media/{container}/{blob}"),
     ("GET", "/redoc"),
     # Chat Text-to-SQL (admin)
     ("POST", "/api/v1/chat/questions"),
     ("GET", "/api/v1/chat/questions/{question_id}/events"),
     ("POST", "/api/v1/chat/questions/{question_id}/feedback"),
+    ("GET", "/api/v1/chat/threads"),
+    ("GET", "/api/v1/chat/threads/{session_id}"),
+    ("DELETE", "/api/v1/chat/threads/{session_id}"),
     # Autenticação (só login de admin; não há cadastro)
     ("POST", "/api/v1/auth/login"),
     ("GET", "/api/v1/auth/me"),
@@ -22,12 +26,16 @@ EXPECTED_ROUTES = {
     ("POST", "/api/v1/shop/auth/resend-otp"),
     ("POST", "/api/v1/shop/auth/login"),
     ("POST", "/api/v1/shop/auth/login/verify-otp"),
+    ("POST", "/api/v1/shop/auth/forgot-password"),
+    ("POST", "/api/v1/shop/auth/reset-password"),
     ("GET", "/api/v1/shop/products"),
     ("GET", "/api/v1/shop/products/categories"),
     ("GET", "/api/v1/shop/products/suggest"),
     ("GET", "/api/v1/shop/products/{product_id}"),
     ("GET", "/api/v1/shop/products/{product_id}/freight"),
+    ("GET", "/api/v1/shop/zip/{zip}"),
     ("POST", "/api/v1/shop/products/batch"),
+    ("GET", "/api/v1/shop/legal"),
     # Loja: exigem cliente autenticado (aud=shop)
     ("GET", "/api/v1/shop/auth/me"),
     ("POST", "/api/v1/shop/auth/logout"),
@@ -43,6 +51,13 @@ EXPECTED_ROUTES = {
     ("POST", "/api/v1/shop/account/addresses"),
     ("PATCH", "/api/v1/shop/account/addresses/{address_id}"),
     ("DELETE", "/api/v1/shop/account/addresses/{address_id}"),
+    ("GET", "/api/v1/shop/account/cards"),
+    ("POST", "/api/v1/shop/account/cards"),
+    ("DELETE", "/api/v1/shop/account/cards/{card_id}"),
+    ("GET", "/api/v1/shop/account/export"),
+    ("PATCH", "/api/v1/shop/account"),
+    ("PATCH", "/api/v1/shop/account/password"),
+    ("DELETE", "/api/v1/shop/account"),
     ("POST", "/api/v1/shop/checkout"),
     ("POST", "/api/v1/shop/checkout/{order_id}/pay"),
     ("GET", "/api/v1/shop/orders"),
@@ -55,6 +70,8 @@ EXPECTED_ROUTES = {
     ("GET", "/api/v1/admin/categories"),
     ("GET", "/api/v1/admin/snapshot"),
     ("POST", "/api/v1/admin/snapshot/refresh"),
+    ("GET", "/api/v1/admin/shop/customers"),
+    ("GET", "/api/v1/admin/shop/orders"),
 }
 
 
@@ -87,12 +104,16 @@ PUBLIC_ROUTES = {
     ("POST", "/api/v1/shop/auth/resend-otp"),
     ("POST", "/api/v1/shop/auth/login"),
     ("POST", "/api/v1/shop/auth/login/verify-otp"),
+    ("POST", "/api/v1/shop/auth/forgot-password"),
+    ("POST", "/api/v1/shop/auth/reset-password"),
     ("GET", "/api/v1/shop/products"),
     ("GET", "/api/v1/shop/products/categories"),
     ("GET", "/api/v1/shop/products/suggest"),
     ("GET", "/api/v1/shop/products/{product_id}"),
     ("GET", "/api/v1/shop/products/{product_id}/freight"),
+    ("GET", "/api/v1/shop/zip/{zip}"),
     ("POST", "/api/v1/shop/products/batch"),
+    ("GET", "/api/v1/shop/legal"),
 }
 
 

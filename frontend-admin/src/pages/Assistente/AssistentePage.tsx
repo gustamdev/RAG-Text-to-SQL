@@ -1,4 +1,5 @@
 import { Composer } from '@/components/chat/Composer'
+import { ThreadSidebar } from '@/components/chat/ThreadSidebar'
 import { MessageList } from '@/components/chat/MessageList'
 import { useChat } from '@/hooks/useChat'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -16,11 +17,18 @@ const EXAMPLES = [
  */
 export default function AssistentePage() {
   usePageTitle('Assistente de dados')
-  const { messages, status, send, sendFeedback } = useChat()
+  const { messages, status, send, sendFeedback, threads, activeId, newChat, openThread, removeThread } = useChat()
   const isEmpty = messages.length === 0 && status === 'idle'
 
   return (
     <div className="assistente">
+      <ThreadSidebar
+        threads={threads}
+        activeId={activeId}
+        onNew={newChat}
+        onOpen={(id) => void openThread(id)}
+        onDelete={(id) => void removeThread(id)}
+      />
       <div className="chat">
         <header className="chat__header">
           <h1 className="chat__title">Assistente de dados</h1>

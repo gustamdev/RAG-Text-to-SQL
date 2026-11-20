@@ -2,10 +2,11 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pymongo.asynchronous.database import AsyncDatabase
 
-from app.api.deps import enforce_public_rate_limit, get_app_db
+from app.api.deps import enforce_catalog_rate_limit, get_app_db
+from app.api.shop_params import ProductId, ZipQuery
 from app.core.errors import NotFound
 from app.database.repos.geolocation import GeolocationRepo
 from app.database.repos.shop_products import ShopProductRepo
@@ -20,26 +21,26 @@ from app.schemas.shop_store import (
     Suggestions,
 )
 from app.services.freight import DEFAULT_WEIGHT_G, FreightService
-from app.services.shop_catalog import NOT_FOUND, ShopCatalog
+from app.services.shop_catalog import NOT_FOUND, ShopCatalog, TtlCache
 
-router = APIRouter(prefix="/shop/products", tags=["shop-catalog"], dependencies=[Depends(enforce_public_rate_limit)])
-
-ProductId = Annotated[str, Path(min_length=1, max_length=64)]
-ZipQuery = Annotated[str, Query(pattern=r"^\d{5}-?\d{3}$", description="CEP com 8 dígitos (aceita hífen).")]
+router = APIRouter(prefix="/shop/products", tags=["shop-catalog"], dependencies=[Depends(enforce_catalog_rate_limit)])
 
 
-def get_catalog(db: AsyncDatabase = Depends(get_app_db)) -> ShopCatalog:
-    return ShopCatalog(ShopProductRepo(db))
+def get_catalog(request: Request, db: AsyncDatabase = Depends(get_app_db)) -> ShopCatalog:
+    cache = getattr(request.app.state, "categories_cache", None)
+    if cache is None:
+        cache = request.app.state.categories_cache = TtlCache()
+    return ShopCatalog(ShopProductRepo(db), cache)
 
 
 @router.get("", response_model=ProductPage)
 async def list_products(
     q: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
     category: Annotated[str | None, Query(max_length=100)] = None,
-    min_price_cents: Annotated[int | None, Query(ge=0)] = None,
-    max_price_cents: Annotated[int | None, Query(ge=0)] = None,
+    min_price_cents: Annotated[int | None, Query(ge=0, le=10**9)] = None,
+    max_price_cents: Annotated[int | None, Query(ge=0, le=10**9)] = None,
     min_rating: Annotated[float | None, Query(ge=1, le=5)] = None,
-    min_reviews: Annotated[int | None, Query(ge=1)] = None,
+    min_reviews: Annotated[int | None, Query(ge=1, le=10**9)] = None,
     in_stock: bool | None = None,
     sort: ShopSort = "best_selling",
     page: Annotated[int, Query(ge=1, le=100_000)] = 1,

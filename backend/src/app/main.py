@@ -1,24 +1,32 @@
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 
 import duckdb
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 from app.agent_graph import build_agent_graph
 from app.api.routes import (
+    admin_shop,
     auth,
     backoffice,
     chat,
     health,
+    media,
     products,
     shop_account,
     shop_auth,
     shop_cart,
     shop_catalog,
     shop_checkout,
+    shop_legal,
+    shop_zip,
 )
 from app.config import settings
 from app.core.errors import DomainError, domain_error_handler
@@ -27,6 +35,7 @@ from app.core.rate_limit import FailureLimiter
 from app.database.connection import close_db, get_database, init_db
 from app.database.container import start_mongo_container
 from app.database.indexes import ensure_indexes
+from app.database.repos.chat_threads import ChatThreadsRepo
 from app.database.seed_mongo import is_seeded, seed_database
 from app.database.sql_engine import SQLEngine, build_snapshot
 from app.llm_models import ValidationModel
@@ -34,6 +43,8 @@ from app.services.agent_runner import AgentRunner
 from app.services.catalog import CatalogService
 from app.services.memory import MemoryService
 from app.services.query_runner import QueryRunner
+from app.services.shop_checkout import ShopCheckout
+from app.services.shop_retention import ShopRetention
 from app.services.snapshot import SnapshotService
 from app.sql_guard import SHOP_VIEW_TABLES
 
@@ -59,6 +70,31 @@ async def _prepare_data() -> None:
         # Seed novo invalida o snapshot antigo; sem seed, só gera se o arquivo não existir.
         if seeded_now or not settings.duckdb_path.exists():
             await asyncio.to_thread(build_snapshot, client, settings.duckdb_path)
+
+
+async def _expire_loop(db, refresher) -> None:
+    """Devolve o estoque de reservas vencidas a cada SHOP_EXPIRE_INTERVAL_S, repete refresh pendente do
+    snapshot e roda a retenção LGPD a cada SHOP_RETENTION_INTERVAL_S; nunca morre por erro."""
+    svc, maint = ShopCheckout(db), ShopRetention(db, refresher)
+    last_retention = time.monotonic() - settings.SHOP_RETENTION_INTERVAL_S  # roda no primeiro ciclo
+    while True:
+        try:
+            if count := await svc.expire_reservations():
+                logger.info("Reservas expiradas: %d", count)
+        except Exception:  # noqa: BLE001
+            logger.exception("Falha ao expirar reservas.")
+        try:
+            if await maint.retry_snapshot():
+                logger.info("Refresh pendente do snapshot repetido.")
+        except Exception:  # noqa: BLE001
+            logger.exception("Falha ao repetir refresh do snapshot.")
+        if time.monotonic() - last_retention >= settings.SHOP_RETENTION_INTERVAL_S:
+            last_retention = time.monotonic()  # avança também na falha: backoff de um intervalo, não retry a cada ciclo
+            try:
+                logger.info("Retenção: %s", await maint.run())
+            except Exception:  # noqa: BLE001
+                logger.exception("Falha na retenção.")
+        await asyncio.sleep(settings.SHOP_EXPIRE_INTERVAL_S)
 
 
 @asynccontextmanager
@@ -112,10 +148,15 @@ async def lifespan(app: FastAPI):
         memory_service,
         ttl_s=settings.CHAT_RESULT_TTL_S,
         max_results=settings.CHAT_RESULT_MAX,
+        threads=ChatThreadsRepo(get_database()),
     )
+
+    expire_task = asyncio.create_task(_expire_loop(get_database(), snapshot_service))
 
     yield
 
+    expire_task.cancel()
+    await asyncio.gather(expire_task, return_exceptions=True)
     await snapshot_service.aclose()
     engine.close()
     await close_db()
@@ -131,9 +172,46 @@ app = FastAPI(
 )
 app.add_exception_handler(DomainError, domain_error_handler)
 
+
+async def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    # Sem `input`/`ctx`: o 422 padrão ecoaria o corpo (PAN, CVV, senha) na resposta.
+    detail = [{k: e[k] for k in ("type", "loc", "msg") if k in e} for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": detail})
+
+
+async def mongo_error_handler(request: Request, exc: PyMongoError) -> JSONResponse:
+    logger.error("Erro do MongoDB em %s: %s", request.url.path, type(exc).__name__)
+    if "/shop" in request.url.path:
+        return JSONResponse(status_code=503, content={"detail": "Serviço indisponível. Tente novamente."})
+    return JSONResponse(status_code=500, content={"detail": "Erro interno."})
+
+
+app.add_exception_handler(RequestValidationError, validation_error_handler)
+app.add_exception_handler(PyMongoError, mongo_error_handler)
+
 allowed_origins = [origin.strip() for origin in settings.CORS_EXTRA_ORIGINS.split(",") if origin.strip()]
 if not settings.is_prod:
     allowed_origins.append("http://localhost:5173")
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Resource-Policy": "same-site",
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Só acrescenta o que a rota não definiu. HSTS fica no proxy TLS (docs/seguranca-loja.md)."""
+    response = await call_next(request)
+    if response.status_code >= 400 and request.url.path.startswith(f"{api_prefix}/shop/zip/"):
+        response.headers["Cache-Control"] = "no-store"
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
+
 
 # Middlewares próprios entram antes; o CORS, registrado por último, fica por fora de todos.
 app.add_middleware(
@@ -149,5 +227,8 @@ app.include_router(chat.router, prefix=api_prefix)  # só admin
 app.include_router(auth.router, prefix=api_prefix)
 app.include_router(products.router, prefix=api_prefix)  # público
 app.include_router(backoffice.router, prefix=api_prefix)  # só admin
-for _shop_router in (shop_auth, shop_catalog, shop_cart, shop_checkout, shop_account):  # público/cliente, aud=shop
+app.include_router(admin_shop.router, prefix=api_prefix)  # só admin, PII mascarada
+# público/cliente, aud=shop
+for _shop_router in (shop_auth, shop_catalog, shop_zip, shop_legal, shop_cart, shop_checkout, shop_account):
     app.include_router(_shop_router.router, prefix=api_prefix)
+app.include_router(media.router)  # público, fora de /api/v1: imagens do blob storage local

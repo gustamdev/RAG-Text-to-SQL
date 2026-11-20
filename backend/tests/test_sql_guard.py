@@ -227,3 +227,17 @@ def test_main_qualified_table_is_accepted():
 def test_current_setting_is_forbidden():
     with pytest.raises(UnsafeQueryError):
         validate("SELECT current_setting('home_directory')")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    ["SELECT * FROM orders, customers, products", "SELECT * FROM orders CROSS JOIN customers CROSS JOIN products"],
+)
+def test_cartesian_product_blocked(sql):
+    with pytest.raises(UnsafeQueryError, match="produto cartesiano"):
+        validate(sql)
+
+
+def test_joins_with_condition_pass():
+    validate("SELECT * FROM orders o JOIN customers c ON o.id = c.id JOIN products p USING (id)")
+    validate("SELECT * FROM orders, customers WHERE orders.id = customers.id")

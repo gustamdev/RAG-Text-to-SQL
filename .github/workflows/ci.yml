@@ -59,7 +59,7 @@ jobs:
         run: npm run build
 
   admin:
-    name: Admin (vitest + build)
+    name: Admin (oxlint + vitest + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +73,9 @@ jobs:
         working-directory: frontend
       - name: Reusar node_modules da loja
         run: ln -s ../frontend/node_modules frontend-admin/node_modules
+      - name: Lint
+        run: npx oxlint
+        working-directory: frontend-admin
       - name: Testes
         run: npm test
         working-directory: frontend-admin

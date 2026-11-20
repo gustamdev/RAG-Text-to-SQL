@@ -42,8 +42,8 @@ class SessionTurn:
     question: str
     answer: str
     # Nota curta sobre dados/ferramentas usados (ex.: "tabelas: orders, order_items"; "12
-    # linha(s)") — nunca SQL ou linhas cruas. Ver agent_runner.py, que extrai isso dos
-    # eventos já truncados que _describe() produz, sem lógica nova de extração.
+    # linha(s)") e uma amostra curta (até 3 linhas, redigida e truncada) para resolver referências
+    # como "essa compra" — nunca SQL. Ver agent_runner.py.
     tool_note: str | None = None
 
 
@@ -100,6 +100,18 @@ class MemoryService:
             self._sessions[session_id] = session
         session.last_used_at = time.monotonic()
         return session
+
+    def forget(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+
+    def has(self, session_id: str) -> bool:
+        return session_id in self._sessions
+
+    def seed(self, session_id: str, turns: list[tuple[str, str]]) -> None:
+        """Repõe turnos salvos (Mongo) numa sessão vazia. Só os últimos `max_turns` entram, crus: o
+        resumo antigo não é salvo, então o que passou disso fica de fora do contexto."""
+        session = self._get_or_create(session_id)
+        session.pending.extend(SessionTurn(question=q, answer=a) for q, a in turns[-self.max_turns :])
 
     async def render_context(self, session_id: str) -> str:
         """Monta o texto de `conversation_context`: resumo + turnos recentes, sob o

@@ -8,7 +8,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from app.auth.security import AUD_ADMIN, decode_access_token
 from app.config import settings
 from app.core.errors import Forbidden, ServiceUnavailable, TooManyRequests, Unauthorized
-from app.core.rate_limit import FailureLimiter, SlidingWindowLimiter
+from app.core.rate_limit import FailureLimiter, SlidingWindowLimiter, ip_key
 from app.database.connection import get_database
 from app.database.repos.users import UserRepo
 from app.database.sql_engine import SQLEngine
@@ -81,14 +81,43 @@ def get_login_limiter(request: Request) -> FailureLimiter:
     return limiter
 
 
+def _ip_limit(request: Request, attr: str, limit: int) -> None:
+    limiter = getattr(request.app.state, attr, None)
+    if limiter is None:
+        limiter = SlidingWindowLimiter(limit, settings.PUBLIC_RATE_WINDOW_S)
+        setattr(request.app.state, attr, limiter)
+    ip = ip_key(request.client.host) if request.client else "unknown"
+    if not limiter.allow(ip):
+        raise TooManyRequests("Muitas requisições. Aguarde um instante e tente de novo.")
+
+
 def enforce_public_rate_limit(request: Request) -> None:
     """Limite por IP nas rotas públicas: elas recalculam agregações e dividem o motor SQL com o assistente."""
-    limiter = getattr(request.app.state, "public_limiter", None)
+    _ip_limit(request, "public_limiter", settings.PUBLIC_RATE_LIMIT)
+
+
+def enforce_catalog_rate_limit(request: Request) -> None:
+    """Balde próprio do catálogo da loja: navegar não gasta a cota de auth (nem do dashboard)."""
+    _ip_limit(request, "catalog_limiter", settings.PUBLIC_RATE_LIMIT)
+
+
+def enforce_zip_rate_limit(request: Request) -> None:
+    """Balde estrito: cada consulta de CEP pode disparar chamada a API externa."""
+    _ip_limit(request, "zip_limiter", max(settings.PUBLIC_RATE_LIMIT // 4, 1))
+
+
+def enforce_auth_rate_limit(request: Request) -> None:
+    """Balde próprio da auth da loja (mais apertado): navegar no catálogo não o consome."""
+    _ip_limit(request, "shop_auth_limiter", max(settings.PUBLIC_RATE_LIMIT // 4, 1))
+
+
+def enforce_customer_rate_limit(request: Request, customer_id: str) -> None:
+    """Limite por cliente autenticado (carrinho, endereços, /me, /logout, frete)."""
+    limiter = getattr(request.app.state, "customer_limiter", None)
     if limiter is None:
         limiter = SlidingWindowLimiter(settings.PUBLIC_RATE_LIMIT, settings.PUBLIC_RATE_WINDOW_S)
-        request.app.state.public_limiter = limiter
-    ip = request.client.host if request.client else "unknown"
-    if not limiter.allow(ip):
+        request.app.state.customer_limiter = limiter
+    if not limiter.allow(customer_id):
         raise TooManyRequests("Muitas requisições. Aguarde um instante e tente de novo.")
 
 

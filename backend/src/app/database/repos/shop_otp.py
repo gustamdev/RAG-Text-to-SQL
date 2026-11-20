@@ -106,6 +106,10 @@ class ShopOtpRepo:
     async def reset(self, key: str, purpose: str) -> None:
         await self.col.delete_one({"email": key, "purpose": purpose})
 
+    async def delete_for_email(self, email: str) -> None:
+        """Apaga OTPs pendentes do e-mail (qualquer finalidade): somem junto com a conta."""
+        await self.col.delete_many({"email": email})
+
     async def allow_send(self, key: str, purpose: str, limit: int, cooldown_s: float) -> bool:
         """Contador de envios por chave (HMAC de e-mail ou IP) em janela de 1 h + cooldown, via $inc atômico."""
         t = now()

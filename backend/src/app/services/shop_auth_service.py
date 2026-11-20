@@ -7,18 +7,19 @@ para conta inexistente/senha errada/não verificada, e o OTP inválido nunca rev
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import logging
 import secrets
 import uuid
 import weakref
 from collections.abc import Callable
+from datetime import timedelta
 
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.auth.security import AUD_SHOP, create_access_token, hash_password, verify_password
 from app.config import settings
 from app.core.errors import BadRequest, TooManyRequests, Unauthorized
-from app.core.rate_limit import FailureLimiter
 from app.core.timeutil import iso, now
 from app.database.repos.shop_audit import ShopAuditRepo
 from app.database.repos.shop_customers import ShopCustomerRepo
@@ -27,8 +28,10 @@ from app.database.repos.users import EmailTaken
 from app.schemas.common import Role
 from app.schemas.shop_auth import (
     CustomerOut,
+    ForgotPasswordRequest,
     MfaRequiredOut,
     ResendOtpRequest,
+    ResetPasswordRequest,
     ShopLoginRequest,
     ShopTokenResponse,
     SignupRequest,
@@ -40,10 +43,17 @@ logger = logging.getLogger(__name__)
 
 INVALID_CREDENTIALS = "E-mail ou senha incorretos."
 INVALID_OTP = "Código inválido ou expirado"
+INVALID_RESET = "Código inválido ou expirado."
+RESET_SENT = "Se o e-mail existir, enviamos um código."
 SEND_LIMIT = "Aguarde para pedir um novo código."
 CODE_SENT = "Se o e-mail puder ser usado, enviamos um código."
 ARGON_CONCURRENCY = 2
 IP_SENDS_FACTOR = 5  # limite de envios por IP/h = fator x limite por e-mail
+OTP_TOTAL_ATTEMPTS_FACTOR = 4  # teto total de chutes = fator x teto por IP (um IP estranho não queima o OTP legítimo)
+PENDING_TTL = timedelta(
+    hours=settings.SHOP_UNVERIFIED_TTL_HOURS
+)  # conta não verificada some depois disso (TTL em pending_expires_at)
+_IP_EVENTS = frozenset({"login_fail", "otp_sent"})  # só eventos de risco guardam o pseudônimo do IP
 
 _semaphores: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
 
@@ -71,45 +81,72 @@ def customer_out(c: dict) -> CustomerOut:
         id=c["_id"],
         nickname=c.get("nickname"),
         email=c["email"],
+        phone=c.get("phone"),
         terms_version=c["terms_version"],
         created_at=iso(c["created_at"]),
     )
 
 
-def _mask_email(email: str) -> str:
-    local, _, domain = email.partition("@")
-    return f"{local[:1]}***@{domain}"
+def _ip_net(ip: str) -> str:
+    """IPv4 truncado ao /24 (IPv6 ao /64) antes do HMAC: o pseudônimo identifica a rede, não a casa."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    return str(ipaddress.ip_network(f"{addr}/{24 if addr.version == 4 else 64}", strict=False))
 
 
 def _active(c: dict | None) -> bool:
     return c is not None and bool(c.get("email_verified")) and not c.get("deleted_at")
 
 
+async def _notify_password_changed(email: str) -> None:
+    try:
+        await asyncio.to_thread(mail.send_password_changed, email)
+    except Exception as exc:  # noqa: BLE001 - só o tipo no log (a mensagem pode ter e-mail)
+        logger.error("Falha ao enviar aviso de senha alterada: %s", type(exc).__name__)
+
+
 async def _deliver(email: str, code: str, purpose: str) -> None:
     try:
         await asyncio.to_thread(mail.send_otp, email, code, purpose)
-    except Exception:  # noqa: BLE001 - envio roda em segundo plano; o log não leva e-mail nem código
-        logger.exception("Falha ao enviar OTP (%s).", purpose)
+    except Exception as exc:  # noqa: BLE001 - segundo plano; só o tipo no log (a mensagem pode ter e-mail/código)
+        logger.error("Falha ao enviar OTP (%s): %s", purpose, type(exc).__name__)
 
 
 class ShopAuthService:
-    def __init__(self, db: AsyncDatabase, limiter: FailureLimiter):
+    def __init__(self, db: AsyncDatabase):
         self.customers = ShopCustomerRepo(db)
         self.otp = ShopOtpRepo(db)
         self.audit = ShopAuditRepo(db)
-        self.limiter = limiter
 
-    async def _audit(self, event: str, source: str, ip: str) -> None:
+    async def _audit(self, event: str, source: str, ip: str | None = None, meta: dict | None = None) -> None:
+        ip_hmac = pseudo(f"ip:{_ip_net(ip)}") if ip and event in _IP_EVENTS else None
         try:
-            await self.audit.add(event, pseudo(source), pseudo(f"ip:{ip}"))
+            await self.audit.add(event, pseudo(source), ip_hmac, meta)
         except Exception:  # noqa: BLE001 - auditoria não derruba o login
             logger.exception("Falha ao gravar auditoria (%s).", event)
 
-    async def _reserve_send(self, email: str, ip: str) -> None:
-        """Limites de envio persistidos (IP, e-mail, cooldown). Conta SEMPRE, exista a conta ou não."""
+    @staticmethod
+    def _buckets(login: bool, reset: bool = False) -> tuple[str, str]:
+        # Envio de login/reset tem baldes PRÓPRIOS: cadastro/reenvio anônimos não esgotam o login do dono do e-mail.
+        if reset:
+            return "rate_rsend_email", "rate_rsend_ip"
+        return ("rate_lsend_email", "rate_lsend_ip") if login else ("rate_email", "rate_ip")
+
+    async def _can_send_login(self, email: str, ip: str) -> bool:
+        b_email, b_ip = self._buckets(True)
         per_email = settings.OTP_MAX_SENDS_PER_HOUR
-        if not await self.otp.allow_send(pseudo(f"ip:{ip}"), "rate_ip", per_email * IP_SENDS_FACTOR, 0) or not (
-            await self.otp.allow_send(pseudo(f"email:{email}"), "rate_email", per_email, settings.OTP_RESEND_COOLDOWN_S)
+        return await self.otp.can_send(
+            pseudo(f"email:{email}"), b_email, per_email, settings.OTP_RESEND_COOLDOWN_S
+        ) and await self.otp.can_send(pseudo(f"ip:{ip}"), b_ip, per_email * IP_SENDS_FACTOR, 0)
+
+    async def _reserve_send(self, email: str, ip: str, login: bool = False, reset: bool = False) -> None:
+        """Limites de envio persistidos (IP, e-mail, cooldown). Conta SEMPRE, exista a conta ou não."""
+        b_email, b_ip = self._buckets(login, reset)
+        per_email = settings.OTP_MAX_SENDS_PER_HOUR
+        if not await self.otp.allow_send(pseudo(f"ip:{ip}"), b_ip, per_email * IP_SENDS_FACTOR, 0) or not (
+            await self.otp.allow_send(pseudo(f"email:{email}"), b_email, per_email, settings.OTP_RESEND_COOLDOWN_S)
         ):
             raise TooManyRequests(SEND_LIMIT)
 
@@ -119,8 +156,11 @@ class ShopAuthService:
         spawn(_deliver, email, code, purpose)
         await self._audit("otp_sent", source, ip)
 
-    async def _consume(self, email: str, purpose: str, code: str) -> None:
-        if not await self.otp.consume(email, purpose, otp_hash(email, purpose, code), settings.OTP_MAX_ATTEMPTS):
+    async def _consume(self, email: str, purpose: str, code: str, ip: str) -> None:
+        per_ip = settings.OTP_MAX_ATTEMPTS
+        total = per_ip * OTP_TOTAL_ATTEMPTS_FACTOR
+        ok = await self.otp.consume(email, purpose, otp_hash(email, purpose, code), total, per_ip, pseudo(f"ip:{ip}"))
+        if not ok:
             raise BadRequest(INVALID_OTP)
 
     @staticmethod
@@ -137,6 +177,7 @@ class ShopAuthService:
         # O argon2 roda sempre (também para e-mail existente): o tempo não entrega se a conta existe.
         password_hash = await _argon(hash_password, p.password)
         fields = {
+            "pending_expires_at": t + PENDING_TTL,
             "nickname": p.nickname,
             "password_hash": password_hash,
             "terms_version": p.terms_version,
@@ -144,7 +185,7 @@ class ShopAuthService:
             "adult_confirmed": True,
         }
         existing = await self.customers.get_by_email(email)
-        customer_id = None
+        customer_id, applied = None, False
         if existing is None:
             doc = {
                 "_id": uuid.uuid4().hex,
@@ -158,20 +199,27 @@ class ShopAuthService:
             }
             try:
                 customer_id = (await self.customers.create(doc))["_id"]
+                applied = True
             except EmailTaken:
                 pass
         elif not existing.get("email_verified") and not existing.get("deleted_at"):
-            # shortcut: o último cadastro pendente vence (pré-sequestro limitado ao TTL do OTP).
-            await self.customers.update_pending(email, fields)
+            # Com OTP de signup vivo a senha pendente NÃO muda (só reenvia): senão um 2º cadastro sequestraria a conta.
+            # Risco residual: depois do OTP expirar o último cadastro pendente vence; o login sempre exige OTP no
+            # e-mail do dono, então quem cadastrou primeiro não entra sem acesso à caixa de entrada.
+            if not await self.otp.has(email, "signup"):
+                await self.customers.update_pending(email, fields)
+                applied = True
             customer_id = existing["_id"]
         if customer_id:
-            await self._audit("signup", customer_id, ip)
+            await self._audit("signup", customer_id)
+            if applied:
+                await self._audit("terms_accepted", customer_id, meta={"version": p.terms_version})
             await self._send_code(email, "signup", ip, spawn, customer_id)
         return CODE_SENT
 
     async def verify_signup(self, p: VerifyOtpRequest, ip: str) -> ShopTokenResponse:
         email = p.email.strip().lower()
-        await self._consume(email, "signup", p.code)
+        await self._consume(email, "signup", p.code, ip)
         customer = await self.customers.get_by_email(email)
         if customer is None or customer.get("deleted_at"):
             raise BadRequest(INVALID_OTP)
@@ -192,38 +240,74 @@ class ShopAuthService:
 
     async def login(self, p: ShopLoginRequest, ip: str, spawn: Callable) -> MfaRequiredOut:
         email = p.email.strip().lower()
-        key, email_key = f"shop:{email}|{ip}", f"shop-email:{email}"
-        if self.limiter.is_blocked(key):
+        # Contadores persistidos (HMAC; sem e-mail/IP em claro), contados ANTES de dormir: rajadas paralelas pagam.
+        window = settings.LOGIN_WINDOW_S
+        n_email, n_ip, n_pair = await asyncio.gather(
+            self.otp.bump(pseudo(f"login-email:{email}"), "rate_login_email", window),
+            self.otp.bump(pseudo(f"login-ip:{ip}"), "rate_login_ip", window),
+            self.otp.bump(pseudo(f"login-pair:{email}|{ip}"), "rate_login_pair", window),
+        )
+        if n_pair > settings.LOGIN_MAX_FAILURES or n_ip > settings.LOGIN_MAX_FAILURES * IP_SENDS_FACTOR:
             await self._audit("login_fail", email, ip)
             raise TooManyRequests("Muitas tentativas. Aguarde alguns minutos e tente de novo.")
-        # Atraso progressivo por e-mail, contado ANTES de dormir (rajadas paralelas também pagam), como no admin.
-        attempts = self.limiter.count(email_key)
-        self.limiter.register_failure(email_key)
-        self.limiter.register_failure(key)
-        extra = attempts - settings.LOGIN_FREE_ATTEMPTS_PER_EMAIL
+        extra = n_email - 1 - settings.LOGIN_FREE_ATTEMPTS_PER_EMAIL
         if extra >= 0:
             await asyncio.sleep(min(2 ** min(extra, 10), settings.LOGIN_MAX_DELAY_S))
+        # 429 de envio ANTES de olhar a senha: a resposta não revela se a senha está certa.
+        if not await self._can_send_login(email, ip):
+            raise TooManyRequests(SEND_LIMIT)
         customer = await self.customers.get_by_email(email)
         ok = await _argon(verify_password, p.password, customer["password_hash"] if customer else None)
         if not ok or not _active(customer):
             await self._audit("login_fail", email, ip)
             raise Unauthorized(INVALID_CREDENTIALS)
-        self.limiter.reset(key)
-        self.limiter.reset(email_key)
-        await self._reserve_send(email, ip)
+        await self.otp.reset(pseudo(f"login-pair:{email}|{ip}"), "rate_login_pair")
+        await self.otp.reset(pseudo(f"login-email:{email}"), "rate_login_email")
+        try:
+            await self._reserve_send(email, ip, login=True)
+        except TooManyRequests:  # corrida entre a consulta e a reserva: não confirma a senha
+            raise Unauthorized(INVALID_CREDENTIALS) from None
         await self._send_code(email, "login", ip, spawn, customer["_id"])
-        return MfaRequiredOut(masked_email=_mask_email(email))
+        return MfaRequiredOut(masked_email=mail.mask_email(email))
 
     async def verify_login(self, p: VerifyOtpRequest, ip: str) -> ShopTokenResponse:
         email = p.email.strip().lower()
-        await self._consume(email, "login", p.code)
+        await self._consume(email, "login", p.code, ip)
         customer = await self.customers.get_by_email(email)
         if not _active(customer):
             raise BadRequest(INVALID_OTP)
         await self.customers.touch_login(customer["_id"])
-        await self._audit("login_ok", customer["_id"], ip)
+        await self._audit("login_ok", customer["_id"])
         return self._token(customer)
 
-    async def logout(self, customer: dict, ip: str) -> None:
+    async def forgot_password(self, p: ForgotPasswordRequest, ip: str, spawn: Callable) -> dict:
+        """Resposta idêntica exista a conta ou não; só conta verificada e não deletada recebe o código."""
+        email = p.email.strip().lower()
+        await self._reserve_send(email, ip, reset=True)  # conta SEMPRE: 429 não revela a conta
+        customer = await self.customers.get_by_email(email)
+        if _active(customer):
+            await self._send_code(email, "reset", ip, spawn, customer["_id"])
+        return {"masked_email": mail.mask_email(email), "message": RESET_SENT}
+
+    async def reset_password(self, p: ResetPasswordRequest, ip: str, spawn: Callable) -> None:
+        email = p.email.strip().lower()
+        try:
+            await self._consume(email, "reset", p.code, ip)
+        except BadRequest:
+            raise BadRequest(INVALID_RESET) from None
+        customer = await self.customers.get_by_email(email)
+        if not _active(customer):
+            raise BadRequest(INVALID_RESET)
+        password_hash = await _argon(hash_password, p.new_password)
+        if not await self.customers.set_password(customer["_id"], password_hash):
+            raise BadRequest(INVALID_RESET)
+        # Invalida OTPs pendentes (login/reset) e limpa só o contador do PRÓPRIO e-mail (nunca o do IP/par).
+        await self.otp.reset(email, "login")
+        await self.otp.reset(email, "reset")
+        await self.otp.reset(pseudo(f"login-email:{email}"), "rate_login_email")
+        await self._audit("password_reset", customer["_id"])
+        spawn(_notify_password_changed, email)
+
+    async def logout(self, customer: dict) -> None:
         await self.customers.bump_token_version(customer["_id"])
-        await self._audit("logout", customer["_id"], ip)
+        await self._audit("logout", customer["_id"])

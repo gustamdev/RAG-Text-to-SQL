@@ -1,12 +1,11 @@
 """Carrinho do cliente (aud=shop). Toda rota filtra por `customer["_id"]`; preço e estoque vêm do servidor."""
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.api.deps import get_app_db
-from app.api.shop_deps import get_current_customer
+from app.api.shop_deps import get_limited_customer
+from app.api.shop_params import ProductId, ZipQuery
 from app.core.errors import Conflict
 from app.database.repos.geolocation import GeolocationRepo
 from app.database.repos.shop_addresses import ShopAddressRepo
@@ -26,27 +25,24 @@ from app.services.shop_cart import ShopCart
 
 router = APIRouter(prefix="/shop/cart", tags=["shop-cart"])
 
-ProductId = Annotated[str, Path(min_length=1, max_length=64)]
-ZipQuery = Annotated[str, Query(pattern=r"^\d{5}-?\d{3}$")]
-
 
 def get_cart(db: AsyncDatabase = Depends(get_app_db)) -> ShopCart:
     return ShopCart(ShopCartRepo(db), ShopProductRepo(db))
 
 
 @router.get("", response_model=CartOut)
-async def read_cart(customer: dict = Depends(get_current_customer), cart: ShopCart = Depends(get_cart)) -> CartOut:
+async def read_cart(customer: dict = Depends(get_limited_customer), cart: ShopCart = Depends(get_cart)) -> CartOut:
     return await cart.get(customer["_id"])
 
 
 @router.delete("", response_model=CartOut)
-async def clear_cart(customer: dict = Depends(get_current_customer), cart: ShopCart = Depends(get_cart)) -> CartOut:
+async def clear_cart(customer: dict = Depends(get_limited_customer), cart: ShopCart = Depends(get_cart)) -> CartOut:
     return await cart.clear(customer["_id"])
 
 
 @router.post("/items", response_model=CartOut)
 async def add_item(
-    body: CartAddIn, customer: dict = Depends(get_current_customer), cart: ShopCart = Depends(get_cart)
+    body: CartAddIn, customer: dict = Depends(get_limited_customer), cart: ShopCart = Depends(get_cart)
 ) -> CartOut:
     return await cart.add(customer["_id"], body.product_id, body.qty)
 
@@ -55,7 +51,7 @@ async def add_item(
 async def patch_item(
     product_id: ProductId,
     body: CartPatchIn,
-    customer: dict = Depends(get_current_customer),
+    customer: dict = Depends(get_limited_customer),
     cart: ShopCart = Depends(get_cart),
 ) -> CartOut:
     return await cart.patch(customer["_id"], product_id, body.qty, body.ack)
@@ -63,14 +59,14 @@ async def patch_item(
 
 @router.delete("/items/{product_id}", response_model=CartOut)
 async def delete_item(
-    product_id: ProductId, customer: dict = Depends(get_current_customer), cart: ShopCart = Depends(get_cart)
+    product_id: ProductId, customer: dict = Depends(get_limited_customer), cart: ShopCart = Depends(get_cart)
 ) -> CartOut:
     return await cart.remove(customer["_id"], product_id)
 
 
 @router.post("/merge", response_model=CartOut)
 async def merge(
-    body: CartMergeIn, customer: dict = Depends(get_current_customer), cart: ShopCart = Depends(get_cart)
+    body: CartMergeIn, customer: dict = Depends(get_limited_customer), cart: ShopCart = Depends(get_cart)
 ) -> CartOut:
     return await cart.merge(customer["_id"], [(i.product_id, i.qty) for i in body.items])
 
@@ -92,7 +88,7 @@ async def _cart_freight(
 @router.get("/freight", response_model=FreightOut)
 async def cart_freight_by_zip(
     zip: ZipQuery,
-    customer: dict = Depends(get_current_customer),
+    customer: dict = Depends(get_limited_customer),
     db: AsyncDatabase = Depends(get_app_db),
     cart: ShopCart = Depends(get_cart),
 ) -> FreightOut:
@@ -102,7 +98,7 @@ async def cart_freight_by_zip(
 @router.post("/freight", response_model=FreightOut)
 async def cart_freight(
     body: CartFreightIn,
-    customer: dict = Depends(get_current_customer),
+    customer: dict = Depends(get_limited_customer),
     db: AsyncDatabase = Depends(get_app_db),
     cart: ShopCart = Depends(get_cart),
 ) -> FreightOut:

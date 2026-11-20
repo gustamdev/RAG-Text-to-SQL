@@ -62,3 +62,12 @@ async def charge(pan: str, exp_month: int, exp_year: int) -> GatewayResult:
     if test is None or (exp_year, exp_month) < (today.year, today.month):
         return GatewayResult("refused", brand, last4)
     return GatewayResult(test, brand, last4)
+
+
+async def charge_saved(
+    outcome: Literal["approved", "refused", "timeout"], brand: str, last4: str, exp_month: int, exp_year: int
+) -> GatewayResult:
+    """Cartão salvo: o PAN não existe mais; vale o resultado fixado no cadastro. Vencido é recusado como no `charge`."""
+    if (exp_year, exp_month) < (date.today().year, date.today().month):
+        return GatewayResult("refused", brand, last4)
+    return GatewayResult(outcome, brand, last4)

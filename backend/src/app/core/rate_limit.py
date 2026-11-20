@@ -1,8 +1,20 @@
 """Limitador de falhas de login em memória (janela deslizante). Suficiente para um processo
 único; com várias réplicas o estado deveria ir para Redis/Mongo."""
 
+import ipaddress
 import time
 from collections import defaultdict, deque
+
+
+def ip_key(ip: str) -> str:
+    """Chave de limite por IP: IPv6 vira o /64 (o cliente controla o /64 e giraria endereços); IPv4 fica exato."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6:
+        return str(ipaddress.ip_network(f"{addr}/64", strict=False).network_address)
+    return str(addr)
 
 
 class FailureLimiter:
@@ -27,9 +39,19 @@ class FailureLimiter:
     def is_blocked(self, key: str) -> bool:
         return self.count(key) >= self.max_failures
 
+    def _purge_expired(self) -> None:
+        now = time.monotonic()
+        for key in list(self._failures):
+            self._prune(key, now)
+
     def register_failure(self, key: str) -> None:
-        if len(self._failures) >= self.max_keys and key not in self._failures:
-            self._failures.pop(next(iter(self._failures)))
+        """Tabela cheia de chaves vivas e `key` nova: evicta a mais antiga (inserida primeiro) para que um flood
+        de chaves não bloqueie todo login novo, admin incluso. shortcut: o flood pode zerar o contador de uma
+        vítima; com várias réplicas/limite por IP, mover para Redis/Mongo."""
+        if key not in self._failures and len(self._failures) >= self.max_keys:
+            self._purge_expired()
+            if len(self._failures) >= self.max_keys:
+                self._failures.pop(next(iter(self._failures)))
         self._failures[key].append(time.monotonic())
 
     def reset(self, key: str) -> None:

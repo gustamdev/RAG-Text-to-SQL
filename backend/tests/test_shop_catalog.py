@@ -165,7 +165,7 @@ def test_seed_prices_positive_stock_nonneg():
     assert docs["p1"]["price_cents"] == 2000  # mediana de 10, 20 e 30,5
     assert docs["p2"]["price_cents"] == 799
     assert all(d["price_cents"] > 0 and d["stock"] >= 0 for d in docs.values())
-    assert docs["p1"]["stock"] == settings.SHOP_FREE_STOCK_DEFAULT
+    assert docs["p1"]["stock"] == seed_shop.initial_stock(docs["p1"]["product_id"], 3)
     assert (docs["p1"]["review_count"], docs["p1"]["avg_rating"]) == (3, 3.67)
     assert docs["p1"]["rating_distribution"] == {"5": 1, "4": 1, "3": 0, "2": 1, "1": 0}
     assert docs["p1"]["photos_qty"] == 5 and docs["p2"]["photos_qty"] == 1
@@ -183,3 +183,17 @@ def test_seed_idempotent_keeps_stock():
     assert db["shop_products"].count_documents({}) == 2
     p1 = db["shop_products"].find_one({"product_id": "p1" + "0" * 30})
     assert p1["stock"] == 1 and p1["units_sold"] == 4  # catálogo atualiza, estoque não volta ao padrão
+
+
+def test_seed_enriched_columns_optional():
+    db = _olist()
+    p1 = "p1" + "0" * 30
+    db["products"].update_one(
+        {"product_id": p1},
+        {"$set": {"product_name": " Toalha Azul ", "product_brand": "Acme", "image_key": f"product-images/{p1}.jpg"}},
+    )
+    seed_shop.seed(db)
+    docs = {d["product_id"][:2]: d for d in db["shop_products"].find()}
+    assert docs["p1"]["title"] == "Toalha Azul" and docs["p1"]["brand"] == "Acme"
+    assert docs["p1"]["image_key"] == f"product-images/{p1}.jpg" and "description" not in docs["p1"]
+    assert docs["p2"]["title"].endswith("Modelo P200") and "image_key" not in docs["p2"]

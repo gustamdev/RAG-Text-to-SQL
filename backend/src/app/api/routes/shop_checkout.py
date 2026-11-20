@@ -7,10 +7,10 @@ from fastapi.responses import JSONResponse
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.api.deps import get_app_db
-from app.api.shop_deps import SnapshotRefresher, get_current_customer, get_snapshot_refresher
+from app.api.shop_deps import SnapshotRefresher, get_limited_customer, get_snapshot_refresher
 from app.core.errors import TooManyRequests
 from app.core.rate_limit import SlidingWindowLimiter
-from app.schemas.shop_orders import CheckoutIn, OrderOut, OrdersPage, PayIn
+from app.schemas.shop_orders import CancelIn, CheckoutIn, OrderOut, OrdersPage, PayIn
 from app.services.shop_checkout import InsufficientStock, ShopCheckout
 
 # Sem prefixo: o checkout vive em /shop/checkout e os pedidos em /shop/orders.
@@ -25,7 +25,7 @@ def _ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
-def enforce_write_limit(request: Request, customer: dict = Depends(get_current_customer)) -> dict:
+def enforce_write_limit(request: Request, customer: dict = Depends(get_limited_customer)) -> dict:
     """Limite por cliente nas escritas; devolve o cliente para a rota."""
     limiter = getattr(request.app.state, "shop_write_limiter", None)
     if limiter is None:
@@ -73,17 +73,18 @@ async def pay_order(
 async def cancel_order(
     order_id: OrderId,
     request: Request,
+    body: CancelIn | None = None,  # sem corpo = motivo "other"
     customer: dict = Depends(enforce_write_limit),
     svc: ShopCheckout = Depends(get_checkout),
 ) -> OrderOut:
-    return await svc.cancel(customer["_id"], order_id, _ip(request))
+    return await svc.cancel(customer["_id"], order_id, (body or CancelIn()).reason, _ip(request))
 
 
 @router.get("/shop/orders", response_model=OrdersPage)
 async def list_orders(
-    page: Annotated[int, Query(ge=1)] = 1,
+    page: Annotated[int, Query(ge=1, le=100_000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=50)] = 20,
-    customer: dict = Depends(get_current_customer),
+    customer: dict = Depends(get_limited_customer),
     svc: ShopCheckout = Depends(get_checkout),
 ) -> OrdersPage:
     return await svc.list_orders(customer["_id"], page, page_size)
@@ -91,6 +92,6 @@ async def list_orders(
 
 @router.get("/shop/orders/{order_id}", response_model=OrderOut)
 async def read_order(
-    order_id: OrderId, customer: dict = Depends(get_current_customer), svc: ShopCheckout = Depends(get_checkout)
+    order_id: OrderId, customer: dict = Depends(get_limited_customer), svc: ShopCheckout = Depends(get_checkout)
 ) -> OrderOut:
     return await svc.get(customer["_id"], order_id)

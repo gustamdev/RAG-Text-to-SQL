@@ -2,9 +2,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-TERMS_VERSION = "1"
+TERMS_VERSION = "2"
 
-_Code = Field(pattern=r"^\d{6}$")
+_Code = Field(pattern=r"^[0-9]{6}$")
 
 
 class _Strict(BaseModel):
@@ -47,6 +47,25 @@ class ShopLoginRequest(_Strict):
     password: str = Field(min_length=1, max_length=128)
 
 
+class ForgotPasswordRequest(_Strict):
+    email: EmailStr
+
+
+class ForgotPasswordOut(BaseModel):
+    masked_email: str
+    message: str
+
+
+class ResetPasswordRequest(_Strict):
+    email: EmailStr
+    code: str = _Code
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class OkOut(BaseModel):
+    ok: bool = True
+
+
 class DetailOut(BaseModel):
     detail: str
 
@@ -60,6 +79,7 @@ class CustomerOut(BaseModel):
     id: str
     nickname: str | None
     email: str
+    phone: str | None = None
     terms_version: str
     created_at: str
 

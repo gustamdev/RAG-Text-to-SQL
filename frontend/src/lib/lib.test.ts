@@ -4,7 +4,7 @@ import { categoryIcon } from './categoryIcons'
 import { brl, measure, monthLabel, num, pct, rating, weight } from './format'
 import { safeRedirect } from './navigation'
 import { pageWindow, totalPages } from './pagination'
-import { categoryHref, categoryLabel, productHref } from './product'
+import { categoryHref, isCancelable, maskZip, productHref, titleCase } from './product'
 import { enumParam, floatParam, intParam, withParams } from './searchParams'
 
 // O Intl do pt-BR separa "R$" do valor com espaço sem quebra.
@@ -23,8 +23,8 @@ describe('safeRedirect', () => {
   })
 
   it('não redireciona de volta para o login (evita laço)', () => {
-    expect(safeRedirect('/login')).toBeNull()
-    expect(safeRedirect('/login?x=1')).toBeNull()
+    expect(safeRedirect('/entrar')).toBeNull()
+    expect(safeRedirect('/entrar/codigo?x=1')).toBeNull()
   })
 })
 
@@ -68,18 +68,11 @@ describe('formatação', () => {
 })
 
 describe('helpers de produto', () => {
-  it('categoryLabel formata snake_case', () => {
-    expect(categoryLabel('cama_mesa_banho')).toBe('Cama mesa banho')
-    expect(categoryLabel('sem_categoria')).toBe('Sem categoria')
-    expect(categoryLabel('')).toBe('Sem categoria')
-    expect(categoryLabel(null)).toBe('Sem categoria')
-    expect(categoryLabel('telefonia')).toBe('Telefonia')
-  })
 
   it('links escapam o id', () => {
     expect(productHref('abc123')).toBe('/produtos/abc123')
     expect(productHref('a/b c')).toBe('/produtos/a%2Fb%20c')
-    expect(categoryHref('cama_mesa_banho')).toBe('/produtos?category=cama_mesa_banho')
+    expect(categoryHref('cama_mesa_banho')).toBe('/c/cama_mesa_banho')
   })
 
   it('categoryIcon casa por palavra-chave e cai em Package', () => {
@@ -147,5 +140,34 @@ describe('searchParams', () => {
     const next = withParams(base, { q: '', page: undefined, sort: 'units' })
     expect(next.toString()).toBe('sort=units')
     expect(base.toString()).toBe('q=a&page=2')
+  })
+})
+
+describe('CEP', () => {
+  it('máscara progressiva', () => {
+    expect(maskZip('01310')).toBe('01310')
+    expect(maskZip('013101')).toBe('01310-1')
+    expect(maskZip('01310-100999')).toBe('01310-100')
+  })
+  it('titleCase', () => {
+    expect(titleCase('sao paulo')).toBe('Sao Paulo')
+  })
+})
+
+describe('panOk', () => {
+  it('aceita cartões de teste e Luhn válido; recusa dígito trocado', async () => {
+    const { panOk } = await import('./product')
+    expect(panOk('4242424242420001')).toBe(true)
+    expect(panOk('4242424242420002')).toBe(true)
+    expect(panOk('4111111111111111')).toBe(true)
+    expect(panOk('4111111111111112')).toBe(false)
+    expect(panOk('')).toBe(false)
+  })
+})
+
+describe('isCancelable', () => {
+  it('permite created/refused/paid e bloqueia o resto', () => {
+    expect(['created', 'refused', 'paid'].every(isCancelable)).toBe(true)
+    expect(['shipped', 'delivered', 'canceled'].some(isCancelable)).toBe(false)
   })
 })

@@ -14,7 +14,7 @@ class Strict(BaseModel):
 
 
 ProductId = Annotated[str, Field(min_length=1, max_length=64)]
-Zip8 = Annotated[str, StringConstraints(pattern=r"^\d{8}$")]
+Zip8 = Annotated[str, StringConstraints(pattern=r"^[0-9]{8}$")]
 Text120 = Annotated[str, Field(max_length=120)]
 UF = Annotated[str, StringConstraints(to_upper=True, pattern=r"^[A-Za-z]{2}$")]
 
@@ -34,6 +34,7 @@ class ProductCard(BaseModel):
     review_count: int
     units_sold: int
     photos_qty: int
+    image_url: str | None = None
 
 
 class ProductDetail(ProductCard):
@@ -86,13 +87,24 @@ class FreightOption(BaseModel):
     days_max: int
 
 
+class ZipOut(BaseModel):
+    zip: str
+    street: str | None = None
+    district: str | None = None
+    city: str
+    state: str
+    lat: float | None = None
+    lng: float | None = None
+    source: Literal["brasilapi", "viacep", "offline"]
+
+
 class FreightOut(BaseModel):
     zip: str
     options: list[FreightOption]
 
 
 class CartFreightIn(Strict):
-    zip: Annotated[str, StringConstraints(pattern=r"^\d{5}-?\d{3}$")] | None = None
+    zip: Annotated[str, StringConstraints(pattern=r"^[0-9]{5}-?[0-9]{3}$")] | None = None
     address_id: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")

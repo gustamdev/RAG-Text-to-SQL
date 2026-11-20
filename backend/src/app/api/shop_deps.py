@@ -4,10 +4,9 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pymongo.asynchronous.database import AsyncDatabase
 
-from app.api.deps import get_app_db, get_login_limiter
+from app.api.deps import enforce_customer_rate_limit, get_app_db
 from app.auth.security import AUD_SHOP, decode_access_token
 from app.core.errors import Unauthorized
-from app.core.rate_limit import FailureLimiter
 from app.database.repos.shop_customers import ShopCustomerRepo
 from app.services.shop_auth_service import ShopAuthService
 
@@ -27,10 +26,8 @@ def get_snapshot_refresher(request: Request) -> SnapshotRefresher:
     return getattr(request.app.state, "snapshot_service", None) or SnapshotRefresher()
 
 
-def get_shop_auth_service(
-    db: AsyncDatabase = Depends(get_app_db), limiter: FailureLimiter = Depends(get_login_limiter)
-) -> ShopAuthService:
-    return ShopAuthService(db, limiter)
+def get_shop_auth_service(db: AsyncDatabase = Depends(get_app_db)) -> ShopAuthService:
+    return ShopAuthService(db)
 
 
 async def get_current_customer(
@@ -52,4 +49,10 @@ async def get_current_customer(
         or customer.get("deleted_at")
     ):
         raise Unauthorized(_INVALID)
+    return customer
+
+
+async def get_limited_customer(request: Request, customer: dict = Depends(get_current_customer)) -> dict:
+    """Cliente autenticado + limite por customer_id. Use em todas as rotas autenticadas da loja (inclusive checkout)."""
+    enforce_customer_rate_limit(request, customer["_id"])
     return customer

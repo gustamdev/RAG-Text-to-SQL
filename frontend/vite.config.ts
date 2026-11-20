@@ -13,7 +13,8 @@ export default defineConfig({
     // Encaminha /api/* para o backend FastAPI (porta 8000), evitando CORS no dev.
     // Sem rewrite: as rotas do backend já vivem em /api/{versão}/... (ver app/main.py).
     proxy: {
-      '/api': 'http://localhost:8000',
+      '/api': 'http://127.0.0.1:8000',
+      '/media': 'http://127.0.0.1:8000',
     },
   },
 })

@@ -1,4 +1,4 @@
-import { LogOut, Menu } from 'lucide-react'
+import { LogOut, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router'
 import { Sidebar } from '@/components/backoffice/Sidebar'
@@ -15,11 +15,14 @@ export function BackofficeLayout() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const [open, setOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => pathname.startsWith('/assistente'))
   const mainRef = useRef<HTMLElement>(null)
 
   // A rolagem é do <main>, não da janela: volta ao topo a cada troca de rota.
   useEffect(() => {
     mainRef.current?.scrollTo(0, 0)
+    // O assistente já tem a própria sidebar de conversas: entra com o menu principal minimizado.
+    setCollapsed(pathname.startsWith('/assistente'))
   }, [pathname])
 
   async function signOut() {
@@ -29,8 +32,19 @@ export function BackofficeLayout() {
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
-      <aside className="hidden w-60 shrink-0 border-r border-border lg:block">
-        <Sidebar />
+      <aside
+        className={`relative hidden shrink-0 border-r border-border transition-[width] lg:block ${collapsed ? 'w-16' : 'w-60'}`}
+      >
+        <Sidebar collapsed={collapsed} />
+        <button
+          type="button"
+          onClick={() => setCollapsed((value) => !value)}
+          aria-label={collapsed ? 'Expandir menu' : 'Minimizar menu'}
+          aria-expanded={!collapsed}
+          className="absolute -right-3 top-5 z-10 grid size-6 place-items-center border border-border bg-background text-muted-foreground hover:text-foreground"
+        >
+          {collapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
+        </button>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">

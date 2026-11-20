@@ -27,7 +27,7 @@ export function Brand({
   return (
     <Link to={to} onClick={onClick} className={cn('inline-flex items-center gap-2.5', className)}>
       <BrandMark />
-      <span className="text-sm font-extrabold uppercase tracking-tight">Olist Insights</span>
+      <span className="text-sm font-extrabold uppercase tracking-tight">Loja Olist</span>
       {suffix && <span className="eyebrow border-l border-border pl-2.5 text-muted-foreground">{suffix}</span>}
     </Link>
   )

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { askQuestion, sendFeedback as postFeedback, streamQuestionEvents } from '../services/chat'
-import type { ChatMessage, ChatStatus, Feedback } from '../types/chat'
+import {
+  askQuestion,
+  deleteThread,
+  getThread,
+  listThreads,
+  sendFeedback as postFeedback,
+  streamQuestionEvents,
+} from '../services/chat'
+import type { ChatMessage, ChatStatus, Feedback, ThreadSummary } from '../types/chat'
 
 const FALLBACK_ERROR = 'Não foi possível obter a resposta. Tente novamente.'
 
@@ -16,6 +23,20 @@ export function useChat() {
   // Persiste entre perguntas (mesma aba) para dar continuidade à conversa — a memória de
   // sessão vive no backend, por session_id; aqui só guardamos o id para reenviar.
   const sessionIdRef = useRef<string | null>(null)
+  const [threads, setThreads] = useState<ThreadSummary[]>([])
+  const [activeId, setActiveId] = useState<string | null>(null)
+
+  const refreshThreads = useCallback(async () => {
+    try {
+      setThreads(await listThreads())
+    } catch {
+      // A lista é um extra: o chat funciona sem ela.
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshThreads()
+  }, [refreshThreads])
 
   useEffect(
     () => () => {
@@ -57,6 +78,7 @@ export function useChat() {
           controller.signal,
         )
         sessionIdRef.current = sessionId
+        setActiveId(sessionId)
         patchMessage(assistant.id, { questionId, sessionId, question: content })
         if (controller.signal.aborted) return
 
@@ -86,10 +108,61 @@ export function useChat() {
         patchMessage(assistant.id, { content: detail, isError: true })
       } finally {
         closeStreamRef.current = null
-        if (!controller.signal.aborted) setStatus('idle')
+        if (!controller.signal.aborted) {
+          setStatus('idle')
+          void refreshThreads()
+        }
       }
     },
-    [status, patchMessage],
+    [status, patchMessage, refreshThreads],
+  )
+
+  /** Interrompe a pergunta em andamento (se houver) e zera a tela para trocar de conversa. */
+  const reset = useCallback((sessionId: string | null) => {
+    abortRef.current?.abort()
+    closeStreamRef.current?.()
+    sessionIdRef.current = sessionId
+    setActiveId(sessionId)
+    setMessages([])
+    setStatus('idle')
+  }, [])
+
+  const newChat = useCallback(() => reset(null), [reset])
+
+  const openThread = useCallback(
+    async (sessionId: string) => {
+      if (sessionId === sessionIdRef.current) return
+      reset(sessionId)
+      try {
+        const thread = await getThread(sessionId)
+        if (sessionIdRef.current !== sessionId) return // o usuário já trocou de conversa
+        setMessages(
+          thread.messages.flatMap((m) => {
+            const answer = createMessage('assistant', m.answer)
+            answer.steps = m.steps.map((e) => ({ node: e.node, label: e.label, detail: e.detail }))
+            Object.assign(answer, { questionId: m.question_id, sessionId, question: m.question })
+            return [createMessage('user', m.question), answer]
+          }),
+        )
+      } catch (error) {
+        if (sessionIdRef.current !== sessionId) return
+        setMessages([createMessage('assistant', error instanceof Error ? error.message : FALLBACK_ERROR, true)])
+      }
+    },
+    [reset],
+  )
+
+  const removeThread = useCallback(
+    async (sessionId: string) => {
+      try {
+        await deleteThread(sessionId)
+      } catch {
+        return
+      }
+      if (sessionId === sessionIdRef.current) reset(null)
+      void refreshThreads()
+    },
+    [reset, refreshThreads],
   )
 
   const sendFeedback = useCallback(
@@ -110,5 +183,5 @@ export function useChat() {
     [messages, patchMessage],
   )
 
-  return { messages, status, send, sendFeedback }
+  return { messages, status, send, sendFeedback, threads, activeId, newChat, openThread, removeThread }
 }

@@ -189,7 +189,8 @@ def test_shop_indexes_created_and_idempotent():
         ("shop_otp", "expires_at", 0),
         ("shop_carts", "updated_at", settings.SHOP_CART_TTL_DAYS * 86400),
         ("shop_idempotency", "created_at", 86400),
-        ("shop_audit", "created_at", 90 * 86400),
+        ("shop_audit", "created_at", 365 * 86400),
+        ("shop_audit", "expires_at", 0),
     ]:
         assert find(col, field).get("expireAfterSeconds") == seconds, col
 
@@ -214,7 +215,7 @@ def test_ttl_option_conflict_applies_collmod_and_never_raises():
     db = FakeDb()
     asyncio.run(ensure_indexes(db))
 
-    audit = {"keyPattern": {"created_at": 1}, "expireAfterSeconds": 90 * 86400}
+    audit = {"keyPattern": {"created_at": 1}, "expireAfterSeconds": 365 * 86400}
     assert {"collMod": "shop_audit", "index": audit} in db.commands
 
 

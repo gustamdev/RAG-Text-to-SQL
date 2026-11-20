@@ -40,10 +40,13 @@ class Settings(BaseSettings):
     OLIST_BASE_URL: str = "https://raw.githubusercontent.com/gustamdev/Olist-E-Commerce-Public-Dataset-2017-2018/main"
     # Ano dos pedidos que o seed carrega no Mongo. Vazio (SEED_YEAR=) = todos os anos.
     # Mudar o valor só tem efeito num banco ainda vazio: o seed não roda sobre dados existentes.
-    SEED_YEAR: int | None = 2018
+    SEED_YEAR: int | None = None
 
     # Vazio = BACKEND_DIR/data/olist.duckdb
     DUCKDB_PATH: str = ""
+    # Blob storage local das imagens de produto (services/blobstore.py). Vazio = BACKEND_DIR/data/blobstore.
+    BLOBSTORE_DIR: str = ""
+    MEDIA_BASE_URL: str = "/media"
     SQL_QUERY_TIMEOUT_S: float = 15
     SNAPSHOT_DEBOUNCE_S: float = 3  # espera antes de reconstruir o snapshot do agente após um pedido pago
     SQL_MAX_CONCURRENT: int = 4
@@ -60,6 +63,8 @@ class Settings(BaseSettings):
     CHAT_RESULT_TTL_S: float = 900
     CHAT_RESULT_MAX: int = 200
     # Limite de perguntas ao chat por administrador (janela deslizante em memória, por processo).
+    ADMIN_SHOP_RATE_LIMIT: int = 60  # consultas /admin/shop por admin na janela
+    ADMIN_SHOP_RATE_WINDOW_S: float = 60
     CHAT_RATE_LIMIT: int = 20
     # Vitrine pública: pedidos por IP e janela (s). Cada consulta recalcula agregações no DuckDB.
     PUBLIC_RATE_LIMIT: int = 120
@@ -82,6 +87,9 @@ class Settings(BaseSettings):
     LANGSMITH_API_KEY: SecretStr = SecretStr("")
     LANGSMITH_PROJECT: str = "rag-backend"
     LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"
+    # Perguntas e resultados SQL do agente podem trazer dado pessoal: por padrão o tracer NÃO envia
+    # entradas nem saídas (só estrutura/latência). Desligar só com contrato/base legal para a transferência.
+    LANGSMITH_HIDE_IO: bool = True
 
     # Loja simulada. Segredos vazios fora de prod viram valores efêmeros (ver _ensure_shop_secrets).
     MAIL_BACKEND: Literal["console", "smtp"] = "console"
@@ -101,7 +109,19 @@ class Settings(BaseSettings):
     SHOP_CART_MAX_QTY: int = 10
     SHOP_CART_TTL_DAYS: int = 30
     SHOP_ORIGIN_ZIP_PREFIX: str = "01310"
+    ZIP_API_ENABLED: bool = True  # CEP real via BrasilAPI/ViaCEP (servidor); False = só prefixo offline
     SHOP_FREE_STOCK_DEFAULT: int = 50
+    SHOP_EXPIRE_INTERVAL_S: float = 60.0
+    # Retenção (LGPD arts. 15-16). Padrões são PLACEHOLDERS a validar pelo dono (ver docs/lgpd-loja.md).
+    SHOP_RETENTION_INTERVAL_S: float = 86400  # frequência do job de retenção
+    SHOP_RETENTION_ORDER_DAYS: int = 1825  # pedidos/pagamentos encerrados: 5 anos
+    SHOP_RETENTION_INACTIVE_DAYS: int = 730  # conta sem login: anonimizada após 2 anos
+    SHOP_UNVERIFIED_TTL_HOURS: int = 24  # conta sem verificação de e-mail
+    # Identificação exibida no aviso de privacidade. Placeholders: trocar antes de qualquer uso real.
+    SHOP_CONTROLLER_NAME: str = "[CONTROLADOR A DEFINIR] (operador desta demonstração)"
+    SHOP_CONTROLLER_CONTACT: str = "[ENDERECO/CNPJ A DEFINIR]"
+    SHOP_DPO_NAME: str = "[ENCARREGADO A DESIGNAR]"
+    SHOP_DPO_EMAIL: str = "[EMAIL-DO-ENCARREGADO A DEFINIR]"
     # Nº de workers do servidor: segredos efêmeros diferem por processo e quebram OTP/pseudônimos.
     WEB_CONCURRENCY: int = 1
 
@@ -152,6 +172,10 @@ class Settings(BaseSettings):
         return Path(self.DUCKDB_PATH) if self.DUCKDB_PATH else BACKEND_DIR / "data" / "olist.duckdb"
 
     @property
+    def blobstore_dir(self) -> Path:
+        return Path(self.BLOBSTORE_DIR) if self.BLOBSTORE_DIR else BACKEND_DIR / "data" / "blobstore"
+
+    @property
     def is_prod(self) -> bool:
         return self.ENV == "prod"
 
@@ -174,3 +198,7 @@ if settings.LANGSMITH_TRACING and settings.LANGSMITH_API_KEY.get_secret_value():
     os.environ["LANGSMITH_API_KEY"] = settings.LANGSMITH_API_KEY.get_secret_value()
     os.environ["LANGSMITH_PROJECT"] = settings.LANGSMITH_PROJECT
     os.environ["LANGSMITH_ENDPOINT"] = settings.LANGSMITH_ENDPOINT
+    # langsmith.Client lê estas variáveis e troca inputs/outputs de cada run por {} antes do envio.
+    os.environ["LANGSMITH_HIDE_INPUTS"] = os.environ["LANGSMITH_HIDE_OUTPUTS"] = (
+        "true" if settings.LANGSMITH_HIDE_IO else "false"
+    )

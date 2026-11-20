@@ -24,7 +24,6 @@ export function NotFound() {
 export function RouteError() {
   const error = useRouteError()
   if (isRouteErrorResponse(error) && error.status === 404) return <NotFound />
-  console.error(error)
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-4">

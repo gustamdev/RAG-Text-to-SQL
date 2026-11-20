@@ -64,7 +64,10 @@ export const MessageList = ({ messages, status, onFeedback }: MessageListProps) 
 
   useEffect(() => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    endRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth' })
+    // Rola só o corpo do chat: scrollIntoView também rolaria os ancestrais (inclusive o layout
+    // com overflow-hidden), deslocando a sidebar.
+    const body = endRef.current?.closest('.chat__body')
+    body?.scrollTo({ top: body.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' })
   }, [messages, status])
 
   const lastMessageId = messages.at(-1)?.id

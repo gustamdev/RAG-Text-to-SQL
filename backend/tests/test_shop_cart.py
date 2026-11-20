@@ -154,3 +154,25 @@ def test_merge_ignores_invalid_and_sums(cart):
         ).status_code
         == 422
     )
+
+
+def test_get_many_empty_never_asks_mongo_for_zero_documents():
+    """O pymongo real recusa to_list(0) (o mongomock aceita): remover o último item do carrinho dava 500."""
+    import asyncio
+
+    from app.database.repos.shop_products import ShopProductRepo
+
+    class Boom:
+        def find(self, *a, **k):
+            raise AssertionError("não deve consultar o Mongo com lista vazia")
+
+    repo = ShopProductRepo.__new__(ShopProductRepo)
+    repo.col = Boom()
+    assert asyncio.run(repo.get_many([])) == []
+
+
+def test_remove_last_item_empties_cart(cart):
+    add(cart, "p-a", 2)
+    res = cart.client.delete(f"{C}/items/p-a")
+    assert res.status_code == 200 and res.json()["items"] == [] and res.json()["item_count"] == 0
+    assert cart.client.get(C).json()["items"] == []

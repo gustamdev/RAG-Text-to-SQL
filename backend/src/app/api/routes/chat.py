@@ -7,7 +7,9 @@ from pymongo.asynchronous.database import AsyncDatabase
 from app.api.deps import get_agent_runner, get_chat_limiter, get_db, require_admin
 from app.core.errors import NotFound, TooManyRequests
 from app.core.rate_limit import SlidingWindowLimiter
-from app.schemas.chat import AskRequest, AskResponse
+from app.core.timeutil import iso
+from app.database.repos.chat_threads import ChatThreadsRepo
+from app.schemas.chat import AskRequest, AskResponse, ThreadDetail, ThreadSummary
 from app.schemas.feedback import FeedbackRequest, FeedbackResponse
 from app.services.agent_runner import AgentRunner
 from app.services.golden_dataset import record_feedback
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[Depends(require_admin)])
 
 QUESTION_NOT_FOUND = "Pergunta não encontrada."
+THREAD_NOT_FOUND = "Conversa não encontrada."
 
 
 @router.post("/questions", response_model=AskResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -80,3 +83,35 @@ async def submit_feedback(
         payload.is_approved,
     )
     return FeedbackResponse(chat_range_id=chat_range_id)
+
+
+@router.get("/threads", response_model=list[ThreadSummary])
+async def list_threads(user: dict = Depends(require_admin), db: AsyncDatabase = Depends(get_db)):
+    rows = await ChatThreadsRepo(db).list(user["_id"])
+    return [ThreadSummary(session_id=r["session_id"], title=r["title"], updated_at=iso(r["updated_at"])) for r in rows]
+
+
+@router.get("/threads/{session_id}", response_model=ThreadDetail)
+async def get_thread(session_id: str, user: dict = Depends(require_admin), db: AsyncDatabase = Depends(get_db)):
+    thread = await ChatThreadsRepo(db).get(user["_id"], session_id)
+    if thread is None:
+        raise NotFound(THREAD_NOT_FOUND)
+    messages = [{k: m[k] for k in ("question_id", "question", "answer", "steps")} for m in thread["messages"]]
+    return ThreadDetail(
+        session_id=thread["session_id"],
+        title=thread["title"],
+        updated_at=iso(thread["updated_at"]),
+        messages=messages,
+    )
+
+
+@router.delete("/threads/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_thread(
+    session_id: str,
+    user: dict = Depends(require_admin),
+    db: AsyncDatabase = Depends(get_db),
+    runner: AgentRunner = Depends(get_agent_runner),
+) -> None:
+    if not await ChatThreadsRepo(db).delete(user["_id"], session_id):
+        raise NotFound(THREAD_NOT_FOUND)
+    runner.memory.forget(runner.session_key(user["_id"], session_id))

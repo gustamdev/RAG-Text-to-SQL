@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.api.deps import Repos, get_current_user, get_login_limiter, get_repos
-from app.core.rate_limit import FailureLimiter
+from app.core.rate_limit import FailureLimiter, ip_key
 from app.schemas.auth import LoginRequest, TokenResponse, UserOut
 from app.services import auth_service
 from app.services.mappers import user_out
@@ -16,7 +16,7 @@ async def login(
     repos: Repos = Depends(get_repos),
     limiter: FailureLimiter = Depends(get_login_limiter),
 ) -> TokenResponse:
-    ip = request.client.host if request.client else "unknown"
+    ip = ip_key(request.client.host) if request.client else "unknown"
     return await auth_service.login(repos.users, limiter, payload, ip)
 
 

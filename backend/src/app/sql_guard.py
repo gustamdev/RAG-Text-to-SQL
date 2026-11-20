@@ -19,11 +19,14 @@ from sqlglot.errors import SqlglotError
 
 DEFAULT_MAX_ROWS = 500
 MAX_ROWS_CAP = 5000
+MAX_BARE_JOINS = 1  # FROM a, b, c / CROSS JOIN sem ON: produto cartesiano; 1 vírgula ainda passa (a, b WHERE ...)
 
 
 # Política de tabelas da loja (E7): o agente só enxerga as views projetadas sem PII; coleções brutas
 # (`shop_*`, users, golden_data) são barradas mesmo que um dia apareçam no snapshot.
-SHOP_VIEW_TABLES = frozenset({"shop_orders_view", "shop_order_items_view", "shop_payments_view", "shop_customers_view"})
+SHOP_VIEW_TABLES = frozenset(
+    {"shop_orders_view", "shop_order_items_view", "shop_payments_view", "shop_customers_view", "shop_products_view"}
+)
 FORBIDDEN_TABLES = frozenset({"users", "golden_data"})
 # Cruzar a loja com estas tabelas do Olist permitiria reidentificar clientes (CEP/UF + datas).
 _OLIST_REIDENTIFYING = frozenset({"customers", "geolocation"})
@@ -233,6 +236,14 @@ def validate_read_only_sql(
             raise UnsafeQueryError(f"Operação proibida na consulta: {node.key.upper()}.")
         if isinstance(node, exp.Func) and (forbidden := _function_names(node) & _FORBIDDEN_FUNCTIONS):
             raise UnsafeQueryError(f"Função proibida na consulta: {', '.join(sorted(forbidden))}.")
+
+    for select in tree.find_all(exp.Select):
+        bare = [
+            j for j in select.args.get("joins") or []
+            if not (j.args.get("on") or j.args.get("using") or j.args.get("method"))
+        ]  # fmt: skip
+        if len(bare) > MAX_BARE_JOINS:
+            raise UnsafeQueryError("Muitas tabelas sem condição de JOIN (produto cartesiano).")
 
     tables: set[str] = set()
     for table in tree.find_all(exp.Table):

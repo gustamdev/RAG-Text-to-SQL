@@ -39,3 +39,15 @@ export interface AgentEvent {
   done: boolean
   answer: string | null
 }
+
+/** Item da lista de conversas (GET /api/v1/chat/threads). */
+export interface ThreadSummary {
+  session_id: string
+  title: string
+  updated_at: string
+}
+
+/** Conversa completa (GET /api/v1/chat/threads/{session_id}): cada item é uma pergunta + resposta. */
+export interface ThreadDetail extends ThreadSummary {
+  messages: { question_id: string; question: string; answer: string; steps: AgentEvent[] }[]
+}

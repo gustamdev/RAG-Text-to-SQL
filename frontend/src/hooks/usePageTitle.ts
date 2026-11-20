@@ -1,9 +1,9 @@
 import { useEffect } from 'react'
 
-const BASE = 'Olist Insights'
+const BASE = 'Loja Olist'
 
 export function usePageTitle(title: string) {
   useEffect(() => {
-    document.title = title ? `${title} — ${BASE}` : `${BASE} — análise de produtos`
+    document.title = title ? `${title} — ${BASE}` : `${BASE}`
   }, [title])
 }

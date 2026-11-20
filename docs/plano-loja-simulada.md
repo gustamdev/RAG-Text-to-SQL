@@ -1,6 +1,6 @@
 # Plano: loja simulada + assistente no frontend admin (v2)
 
-Status: v2, consolidado após revisão de `critico`, `cyber` (STRIDE, 32 ameaças) e `lgpd`. Nada é implementado, commitado nem publicado. Qualquer deploy, push ou envio real de e-mail exige autorização explícita do dono.
+Status: v2 (histórico: a loja já foi implementada), consolidado após revisão de `critico`, `cyber` (STRIDE, 32 ameaças) e `lgpd`. Nada é implementado, commitado nem publicado. Qualquer deploy, push ou envio real de e-mail exige autorização explícita do dono.
 
 ## Objetivo e métrica de sucesso
 

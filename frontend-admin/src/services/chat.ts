@@ -1,5 +1,5 @@
-import { createSSEParser } from './sse'
-import type { AgentEvent, AskResponse, Feedback } from '../types/chat'
+x`ximport { createSSEParser } from './sse'
+import type { AgentEvent, AskResponse, Feedback, ThreadDetail, ThreadSummary } from '../types/chat'
 import { API_BASE, ApiError, api, notifyUnauthorized, tokenStore } from './http'
 
 const INTERRUPTED = 'A conexão com o servidor foi interrompida.'
@@ -174,3 +174,11 @@ export function streamQuestionEvents(
     controller.abort()
   }
 }
+
+export const listThreads = (): Promise<ThreadSummary[]> => chatRequest(() => api<ThreadSummary[]>('/chat/threads'))
+
+export const getThread = (sessionId: string): Promise<ThreadDetail> =>
+  chatRequest(() => api<ThreadDetail>(`/chat/threads/${encodeURIComponent(sessionId)}`))
+
+export const deleteThread = (sessionId: string): Promise<void> =>
+  chatRequest(() => api<void>(`/chat/threads/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }))

@@ -5,6 +5,8 @@ from pymongo.asynchronous.database import AsyncDatabase
 
 from app.core.timeutil import now
 
+ORDER = [("created_at", ASCENDING), ("_id", ASCENDING)]
+
 
 class ShopAddressRepo:
     """Toda query filtra por customer_id: endereço alheio é indistinguível de inexistente."""
@@ -13,7 +15,7 @@ class ShopAddressRepo:
         self.col = db["shop_addresses"]
 
     async def for_customer(self, customer_id: str) -> list[dict]:
-        return await self.col.find({"customer_id": customer_id}).sort("created_at", ASCENDING).to_list(100)
+        return await self.col.find({"customer_id": customer_id}).sort(ORDER).to_list(100)
 
     async def get(self, customer_id: str, address_id: str) -> dict | None:
         return await self.col.find_one({"_id": address_id, "customer_id": customer_id})
@@ -32,10 +34,19 @@ class ShopAddressRepo:
         )
         return await self.get(customer_id, address_id) if result.matched_count else None
 
-    async def unset_default_except(self, customer_id: str, keep_id: str) -> None:
-        await self.col.update_many(
-            {"customer_id": customer_id, "_id": {"$ne": keep_id}}, {"$set": {"is_default": False}}
-        )
+    async def normalize_default(self, customer_id: str) -> None:
+        """Deixa exatamente UM padrão. Vale o mais recente (updated_at, _id) entre os marcados (ou entre todos, se
+        duas requisições paralelas se desmarcaram). Determinístico: execuções concorrentes convergem ao mesmo."""
+        rows = await self.for_customer(customer_id)
+        marked = [r for r in rows if r.get("is_default")]
+        if len(marked) == 1 or not rows:
+            return
+        keep = max(marked or rows, key=lambda r: (r["updated_at"], r["_id"]))["_id"]
+        await self.col.update_many({"customer_id": customer_id, "_id": {"$ne": keep}}, {"$set": {"is_default": False}})
+        await self.col.update_one({"customer_id": customer_id, "_id": keep}, {"$set": {"is_default": True}})
 
     async def delete(self, customer_id: str, address_id: str) -> bool:
         return (await self.col.delete_one({"_id": address_id, "customer_id": customer_id})).deleted_count == 1
+
+    async def delete_all(self, customer_id: str) -> None:
+        await self.col.delete_many({"customer_id": customer_id})

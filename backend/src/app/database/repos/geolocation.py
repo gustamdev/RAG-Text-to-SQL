@@ -14,3 +14,11 @@ class GeolocationRepo:
         if not doc or doc.get("geolocation_lat") is None or doc.get("geolocation_lng") is None:
             return None
         return float(doc["geolocation_lat"]), float(doc["geolocation_lng"])
+
+    async def city_state(self, zip_prefix: str) -> tuple[str, str] | None:
+        doc = await self.col.find_one(
+            {"geolocation_zip_code_prefix": zip_prefix}, {"geolocation_city": 1, "geolocation_state": 1}
+        )
+        if not doc or not doc.get("geolocation_city") or not doc.get("geolocation_state"):
+            return None
+        return str(doc["geolocation_city"]), str(doc["geolocation_state"])

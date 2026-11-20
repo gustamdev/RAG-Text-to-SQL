@@ -1,20 +1,34 @@
+import { CircleCheck, Info, OctagonAlert, TriangleAlert, X } from "lucide-react";
 import { Toaster as Sonner } from "sonner";
 
 type ToasterProps = React.ComponentProps<typeof Sonner>;
 
-const Toaster = ({ ...props }: ToasterProps) => {
+/*
+ * Posição e visual: ver "Avisos" em index.css.
+ * Os offsets vêm de variáveis CSS para trocar no breakpoint (md) sem JS:
+ * desktop = canto inferior direito, longe do header e do menu de categorias;
+ * mobile = acima do TabBar e da barra fixa de compra, com safe-area.
+ */
+const Toaster = (props: ToasterProps) => {
   return (
     <Sonner
-      className="toaster group"
-      toastOptions={{
-        classNames: {
-          toast:
-            "group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",
-          description: "group-[.toast]:text-muted-foreground",
-          actionButton: "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground",
-          cancelButton: "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground",
-        },
+      position="bottom-right"
+      visibleToasts={3}
+      duration={4000}
+      gap={8}
+      closeButton
+      containerAriaLabel="Avisos"
+      style={{ "--width": "400px" } as React.CSSProperties}
+      offset={{ bottom: "var(--toast-bottom)", right: "var(--toast-side)" }}
+      mobileOffset={{ bottom: "var(--toast-bottom)", left: "var(--toast-side)", right: "var(--toast-side)" }}
+      icons={{
+        success: <CircleCheck className="size-4" aria-hidden="true" />,
+        info: <Info className="size-4" aria-hidden="true" />,
+        warning: <TriangleAlert className="size-4" aria-hidden="true" />,
+        error: <OctagonAlert className="size-4" aria-hidden="true" />,
+        close: <X className="size-4" aria-hidden="true" />,
       }}
+      toastOptions={{ closeButtonAriaLabel: "Fechar aviso" }}
       {...props}
     />
   );

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import os
 import sys
 import uuid
 from datetime import datetime
@@ -9,6 +10,11 @@ import duckdb
 import pytest
 from fastapi.testclient import TestClient
 
+# Antes de importar app.config: a suíte NUNCA envia traces ao LangSmith (variável de ambiente vence o .env).
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["LANGSMITH_API_KEY"] = ""
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.api.deps import get_app_db, get_sql_engine  # noqa: E402
@@ -16,6 +22,14 @@ from app.auth.security import create_access_token, hash_password  # noqa: E402
 from app.core.timeutil import now  # noqa: E402
 from app.database.indexes import ensure_indexes  # noqa: E402
 from app.database.sql_engine import SQLEngine  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_zip_network(monkeypatch):
+    """A suíte nunca chama BrasilAPI/ViaCEP; testes do CEP real religam com transporte mockado."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ZIP_API_ENABLED", False)
 
 
 @pytest.fixture
@@ -30,6 +44,8 @@ def _reset_app_state(app) -> None:
     app.state.login_limiter = None
     app.state.chat_limiter = None
     app.state.public_limiter = None
+    for name in ("zip_limiter", "catalog_limiter", "shop_auth_limiter", "customer_limiter", "categories_cache"):
+        setattr(app.state, name, None)
     app.state._state.pop("query_runner", None)
 
 

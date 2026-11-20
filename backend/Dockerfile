@@ -51,5 +51,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
 
 # Atrás do nginx (rede interna do compose, porta 8000 não publicada): confia no X-Forwarded-For
 # para o limitador de login enxergar o IP real do cliente e não o do proxy. Quem pode ser
-# proxy vem de FORWARDED_ALLOW_IPS (o compose define a sub-rede dele); sem a variável, só 127.0.0.1.
+# proxy vem de FORWARDED_ALLOW_IPS (o compose define a sub-rede dele; sem a variável, só 127.0.0.1).
+# Liste só o IP/CIDR do proxy, nunca `*`, e faça o proxy SOBRESCREVER X-Forwarded-For: o rate limit por IP depende disso.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

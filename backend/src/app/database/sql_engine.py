@@ -37,6 +37,8 @@ _READ_ONLY_CONFIG = {
     "enable_external_access": False,
     "autoinstall_known_extensions": False,
     "autoload_known_extensions": False,
+    "memory_limit": "1GB",
+    "threads": 2,
     "lock_configuration": True,
 }
 

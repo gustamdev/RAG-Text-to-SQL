@@ -35,6 +35,7 @@ def s(shop):  # noqa: F811
     shop.client.app.state.shop_write_limiter = None
     shop.client.app.dependency_overrides[get_snapshot_refresher] = Spy
     shop.run(shop.db["shop_idempotency"].create_index([("customer_id", 1), ("scope", 1), ("key", 1)], unique=True))
+    shop.run(shop.db["shop_payments"].create_index("order_id", unique=True))
     shop.product("p-a", price_cents=1000, stock=5, title="Item A")
     shop.product("p-b", price_cents=250, stock=5, title="Item B")
     shop.login("cust-a")
@@ -79,7 +80,23 @@ def new_order(s, pid="p-a", qty=2):
     add(s, pid, qty)
     r = checkout(s)
     assert r.status_code == 201, r.text
+    Spy.calls = 0  # criar pedido também pede refresh (estoque reservado); os testes contam só o que vem depois
     return r.json()
+
+
+def test_stock_changes_request_snapshot_refresh_and_last_item_sells_out(s):
+    s.set_product("p-a", stock=2)
+    add(s, "p-a", 2)
+    assert checkout(s).status_code == 201 and Spy.calls == 1 and stock(s) == 0  # reserva
+    s.login("cust-b")
+    s.run(_addr(s, "cust-b"))
+    assert s.client.post(f"{V1}/shop/cart/items", json={"product_id": "p-a", "qty": 1}).status_code == 409
+    assert s.client.get(f"{V1}/shop/products?in_stock=true").json()["total"] == 1  # só p-b
+    order_id = s.run(s.db["shop_orders"].find_one({}))["order_id"]
+    s.login("cust-a")
+    Spy.calls = 0
+    assert s.client.post(f"{V1}/shop/orders/{order_id}/cancel").status_code == 200
+    assert Spy.calls == 1 and stock(s) == 2  # devolução
 
 
 def test_total_ignores_client_price_and_state(s):
@@ -183,6 +200,11 @@ def test_real_or_unknown_pan_refused_generic_without_leak(s):
     bad = pay(s, order["order_id"], pan="4111111111111112")  # Luhn inválido
     assert bad.status_code == 422
     assert pay(s, order["order_id"], pan="12ab").status_code == 422
+    # Número malformado não gasta tentativa: só o pagamento recusado (1) conta.
+    for _ in range(6):
+        assert pay(s, order["order_id"], pan="4111111111111112").status_code == 422
+    assert s.run(s.db["shop_payments"].find_one({"order_id": order["order_id"]}))["attempts"] == 1
+    assert pay(s, order["order_id"], pan=OK).status_code == 200
 
 
 def test_pan_cvv_never_stored_or_logged(s, caplog):
@@ -240,9 +262,67 @@ def test_cancel_returns_stock_only_active(s):
     assert r.status_code == 200 and r.json()["state"] == "canceled" and stock(s) == 5
     assert s.client.post(f"{V1}/shop/orders/{order['order_id']}/cancel").status_code == 409
     assert stock(s) == 5  # não devolve duas vezes
+    assert order_doc(s, order["order_id"])["canceled_from"] == "created"
+
+
+def test_cancel_paid_refunds_and_returns_stock(s):
     paid = new_order(s)
     pay(s, paid["order_id"])
+    assert stock(s) == 3
+    r = s.client.post(f"{V1}/shop/orders/{paid['order_id']}/cancel", json={"reason": "wrong_item"})
+    body = r.json()
+    assert r.status_code == 200 and body["state"] == "canceled" and stock(s) == 5
+    assert body["cancel_reason"] == "wrong_item" and body["refund_cents"] == body["total_cents"]
+    assert body["canceled_at"] and [t["state"] for t in body["timeline"]] == ["created", "paid", "canceled"]
+    doc = order_doc(s, paid["order_id"])
+    assert doc["canceled_from"] == "paid" and doc["refund_cents"] == doc["total_cents"]
+    pay_doc = s.run(s.db["shop_payments"].find_one({"order_id": paid["order_id"]}))
+    assert pay_doc["status"] == "approved" and pay_doc["refund"]["amount_cents"] == doc["total_cents"]
+    audit = s.run(s.db["shop_audit"].find_one({"event": "order_canceled"}))
+    assert audit["meta"] == {"order_id": paid["order_id"], "reason": "wrong_item", "from": "paid"}
     assert s.client.post(f"{V1}/shop/orders/{paid['order_id']}/cancel").status_code == 409
+    assert stock(s) == 5
+    summary = s.client.get(f"{V1}/shop/orders").json()["items"][0]
+    assert summary["cancel_reason"] == "wrong_item" and summary["refund_cents"] == doc["total_cents"]
+
+
+def test_cancel_defaults_reason_and_rejects_bad_body(s):
+    order = new_order(s)
+    url = f"{V1}/shop/orders/{order['order_id']}/cancel"
+    assert s.client.post(url, json={"reason": "x"}).status_code == 422
+    assert s.client.post(url, json={"reason": "other", "extra": 1}).status_code == 422
+    body = s.client.post(url).json()
+    assert body["cancel_reason"] == "other" and body["refund_cents"] == 0 and body["canceled_at"]
+
+
+@pytest.mark.parametrize("state", ["shipped", "delivered"])
+def test_cancel_shipped_or_delivered_409(s, state):
+    order = new_order(s)
+    pay(s, order["order_id"])
+    s.run(s.db["shop_orders"].update_one({"order_id": order["order_id"]}, {"$set": {"state": state}}))
+    r = s.client.post(f"{V1}/shop/orders/{order['order_id']}/cancel")
+    assert r.status_code == 409 and r.json()["detail"] == "Pedido já enviado: não pode ser cancelado."
+    assert stock(s) == 3
+
+
+def test_cancel_x_pay_race_one_winner(s):
+    order = new_order(s)
+    oid = order["order_id"]
+
+    async def race():
+        loop = asyncio.get_running_loop()
+        return await asyncio.gather(
+            loop.run_in_executor(None, lambda: pay(s, oid).status_code),
+            loop.run_in_executor(None, lambda: s.client.post(f"{V1}/shop/orders/{oid}/cancel").status_code),
+        )
+
+    codes = asyncio.run(race())
+    doc = order_doc(s, oid)
+    assert doc["state"] in ("paid", "canceled") and 200 in codes
+    if doc["state"] == "canceled":  # estoque volta uma vez, de created ou do pago
+        assert stock(s) == 5 and doc["canceled_from"] in ("created", "paid")
+    else:
+        assert stock(s) == 3
 
 
 @pytest.fixture
@@ -339,3 +419,287 @@ def test_pay_after_expiry_409(s):
 def test_write_rate_limit(s):
     codes = [checkout(s).status_code for _ in range(22)]
     assert codes[-1] == 429
+
+
+# --- hardening da revisão E5 ---------------------------------------------------------------
+
+
+def test_open_orders_limited_and_cart_kept_until_paid(s):
+    add(s, "p-a", 1)
+    for _ in range(3):
+        assert checkout(s).status_code == 201
+    r = checkout(s)
+    assert r.status_code == 409 and "em aberto" in r.json()["detail"]
+    assert stock(s) == 2 and s.client.get(f"{V1}/shop/cart").json()["item_count"] == 1  # carrinho intacto
+
+
+def test_validation_error_does_not_echo_card(s):
+    order = new_order(s)
+    r = pay(s, order["order_id"], pan="4111111111111111", cvv="abc")
+    assert r.status_code == 422
+    assert "4111111111111111" not in r.text and "abc" not in r.text and "input" not in r.text
+
+
+def test_mongo_error_on_shop_is_503(s, monkeypatch):
+    from pymongo.errors import PyMongoError
+
+    from app.database.repos.shop_orders import ShopOrderRepo
+
+    async def boom(self, *a, **k):
+        raise PyMongoError("down")
+
+    monkeypatch.setattr(ShopOrderRepo, "page", boom)
+    s.client.raise_server_exceptions = False
+    assert s.client.get(f"{V1}/shop/orders").status_code == 503
+
+
+def test_orphan_idempotency_claim_is_taken_over(s):
+    add(s, "p-a", 1)
+    k = key()
+    digest = __import__("app.services.shop_checkout", fromlist=["body_hash"]).body_hash(s.addr_a, "standard")
+    old = now() - timedelta(minutes=10)
+    s.run(s.db["shop_idempotency"].insert_one({
+        "customer_id": "cust-a", "scope": "checkout", "key": k, "body_hash": digest,
+        "status_code": None, "response": None, "created_at": old,
+    }))  # fmt: skip
+    assert checkout(s, idem=k).status_code == 201  # retomado
+    fresh = key()
+    s.run(s.db["shop_idempotency"].insert_one({
+        "customer_id": "cust-a", "scope": "checkout", "key": fresh, "body_hash": digest,
+        "status_code": None, "response": None, "created_at": now(),
+    }))  # fmt: skip
+    assert checkout(s, idem=fresh).status_code == 409  # em andamento de verdade
+
+
+def test_post_transition_failures_keep_response(s, monkeypatch):
+    from app.database.repos.shop_carts import ShopCartRepo
+    from app.database.repos.shop_payments import ShopPaymentRepo
+
+    async def boom(self, *a, **k):
+        raise RuntimeError("db")
+
+    order = new_order(s)
+    monkeypatch.setattr(ShopPaymentRepo, "record", boom)
+    monkeypatch.setattr(ShopCartRepo, "remove", boom)
+    r = pay(s, order["order_id"])
+    assert r.status_code == 200 and r.json()["order"]["state"] == "paid"
+
+
+def test_release_continues_after_item_failure(s, monkeypatch):
+    released = []
+
+    async def release(self, pid, qty):
+        if pid == "p-a":
+            raise RuntimeError("db")
+        released.append(pid)
+
+    monkeypatch.setattr(ShopStockRepo, "release", release)
+    s.run(ShopCheckout(s.db)._release([{"product_id": "p-a", "qty": 1}, {"product_id": "p-b", "qty": 1}]))
+    assert released == ["p-b"]
+
+
+def test_freight_weight_from_order_items(s, monkeypatch):
+    seen = []
+    real = ShopCheckout(s.db).freight.options.__func__
+
+    async def options(self, zip_, weight, state=None):
+        seen.append(weight)
+        return await real(self, zip_, weight, state)
+
+    from app.services.freight import FreightService
+
+    monkeypatch.setattr(FreightService, "options", options)
+    add(s, "p-a", 2)
+    assert checkout(s).status_code == 201
+    assert seen == [2000.0]
+
+
+def test_concurrent_pays_respect_attempt_cap(s):
+    order = new_order(s)
+    from app.schemas.shop_orders import PayIn
+    from app.services import payment_gateway
+
+    card = PayIn(card_number=REFUSED, holder="ANA SOUZA", exp_month=12, exp_year=2099, cvv=CVV)
+    calls = []
+    real = payment_gateway.charge
+
+    async def charge(*a, **k):
+        calls.append(1)
+        return await real(*a, **k)
+
+    payment_gateway.charge = charge
+    try:
+
+        async def go(_):
+            try:
+                return await ShopCheckout(s.db).pay("cust-a", order["order_id"], key(), card)
+            except Exception as exc:  # noqa: BLE001
+                return exc
+
+        results = s.run(_gather(go, range(12)))
+    finally:
+        payment_gateway.charge = real
+    assert len(calls) <= 5 and s.run(s.db["shop_payments"].find_one({"order_id": order["order_id"]}))["attempts"] == 5
+    assert sum(1 for r in results if isinstance(r, tuple)) <= 5
+
+
+def test_expire_loop_survives_errors_and_cancels(s, monkeypatch):
+    from app import main
+
+    n = 0
+
+    async def boom(self, at=None):
+        nonlocal n
+        n += 1
+        raise RuntimeError("db")
+
+    monkeypatch.setattr(ShopCheckout, "expire_reservations", boom)
+    monkeypatch.setattr(main.settings, "SHOP_EXPIRE_INTERVAL_S", 0.01)
+
+    async def run():
+        task = asyncio.create_task(main._expire_loop(s.db, SnapshotRefresher()))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return task.cancelled()
+
+    assert s.run(run()) and n >= 2
+
+
+def test_admin_login_not_blocked_when_limiter_full(s):
+    from app.core.rate_limit import FailureLimiter
+
+    limiter = s.client.app.state.login_limiter = FailureLimiter(5, 60, max_keys=1)
+    limiter.register_failure("outra")
+    r = s.client.post(f"{V1}/auth/login", json={"email": "a@b.co", "password": "x" * 12})
+    assert r.status_code == 401  # tabela cheia evicta a mais antiga: segue para a checagem de credenciais
+
+
+# --- hardening da revisão E5 (2ª rodada) -------------------------------------------------------
+
+
+def test_open_cap_rechecked_after_reserve_rolls_back(s, monkeypatch):
+    from app.database.repos.shop_orders import ShopOrderRepo
+
+    calls = iter([0, 4])  # pré-checagem passa; recheque vê a corrida
+
+    async def count_open(self, customer_id):
+        return next(calls)
+
+    monkeypatch.setattr(ShopOrderRepo, "count_open", count_open)
+    add(s, "p-a", 2)
+    r = checkout(s)
+    assert r.status_code == 409 and "em aberto" in r.json()["detail"]
+    assert stock(s) == 5 and s.run(s.db["shop_orders"].count_documents({})) == 0
+
+
+def test_order_qty_cap_422(s):
+    for i in range(4):
+        s.product(f"p-q{i}", price_cents=100, stock=50, title=f"Q{i}")
+        add(s, f"p-q{i}", 10)
+    r = checkout(s)
+    assert r.status_code == 422 and "por pedido" in r.json()["detail"]
+    assert s.run(s.db["shop_orders"].count_documents({})) == 0
+
+
+def test_unknown_shipping_option_422(s, monkeypatch):
+    from app.services.freight import FreightService
+
+    async def none(self, *a, **k):
+        return []
+
+    monkeypatch.setattr(FreightService, "options", none)
+    add(s, "p-a", 1)
+    assert checkout(s).status_code == 422 and stock(s) == 5
+
+
+def test_expiry_between_charge_and_transition_is_refunded(s, monkeypatch):
+    from app.services import payment_gateway
+
+    order = new_order(s)
+    real = payment_gateway.charge
+
+    async def slow(*a, **k):
+        out = await real(*a, **k)
+        past = now() - timedelta(seconds=1)  # reserva vence durante a cobrança
+        await s.db["shop_orders"].update_one(
+            {"order_id": order["order_id"]}, {"$set": {"reservation_expires_at": past}}
+        )
+        return out
+
+    monkeypatch.setattr(payment_gateway, "charge", slow)
+    r = pay(s, order["order_id"])
+    assert r.status_code == 409
+    assert order_doc(s, order["order_id"])["state"] == "created"
+    assert s.run(s.db["shop_payments"].find_one({"order_id": order["order_id"]}))["status"] == "refunded"
+
+
+def test_lost_race_does_not_overwrite_winner_payment(s, monkeypatch):
+    from app.services import payment_gateway
+
+    order = new_order(s)
+    real = payment_gateway.charge
+
+    async def slow(*a, **k):
+        out = await real(*a, **k)  # outro pagamento vence: pedido sai de created e o doc dele fica approved
+        await s.db["shop_orders"].update_one({"order_id": order["order_id"]}, {"$set": {"state": "paid"}})
+        await s.db["shop_payments"].update_one(
+            {"order_id": order["order_id"]}, {"$set": {"status": "approved", "brand": "visa", "last4": "0001"}}
+        )
+        return out
+
+    monkeypatch.setattr(payment_gateway, "charge", slow)
+    assert pay(s, order["order_id"]).status_code == 409
+    doc = s.run(s.db["shop_payments"].find_one({"order_id": order["order_id"]}))
+    assert doc["status"] == "approved" and doc["last4"] == "0001"
+
+
+def test_paid_clears_only_paid_items(s):
+    order = new_order(s, "p-a", 1)
+    add(s, "p-b", 1)  # adicionado depois do checkout
+    assert pay(s, order["order_id"]).status_code == 200
+    cart = s.client.get(f"{V1}/shop/cart").json()
+    assert [i["product_id"] for i in cart["items"]] == ["p-b"]
+
+
+def test_reserve_attempt_retries_duplicate_key_once():
+    import asyncio
+
+    from pymongo.errors import DuplicateKeyError
+
+    from app.database.repos.shop_payments import ShopPaymentRepo
+
+    class Col:
+        n = 0
+
+        async def find_one_and_update(self, *a, **k):
+            Col.n += 1
+            if Col.n == 1:
+                raise DuplicateKeyError("dup")
+            return {"attempts": 1}
+
+    repo = ShopPaymentRepo.__new__(ShopPaymentRepo)
+    repo.col = Col()
+    assert asyncio.run(repo.reserve_attempt("o1", 5)) is True
+
+    class Always:
+        async def find_one_and_update(self, *a, **k):
+            raise DuplicateKeyError("dup")
+
+    repo.col = Always()  # sempre duplicado: teto de verdade
+    assert asyncio.run(repo.reserve_attempt("o1", 5)) is False
+
+
+def test_idempotency_complete_needs_claim_token(s):
+    from app.database.repos.shop_idempotency import ShopIdempotencyRepo
+
+    repo = ShopIdempotencyRepo(s.db)
+    none, t1 = s.run(repo.claim("c", "pay", "k", "h"))
+    assert none is None
+    s.run(s.db["shop_idempotency"].update_one({"key": "k"}, {"$set": {"created_at": now() - timedelta(hours=1)}}))
+    none, t2 = s.run(repo.claim("c", "pay", "k", "h"))  # retomado por outro
+    assert none is None and t1 != t2
+    s.run(repo.complete("c", "pay", "k", t1, 200, {"old": 1}))  # original lento: ignorado
+    assert s.run(s.db["shop_idempotency"].find_one({"key": "k"}))["status_code"] is None
+    s.run(repo.complete("c", "pay", "k", t2, 200, {"new": 1}))
+    assert s.run(s.db["shop_idempotency"].find_one({"key": "k"}))["response"] == {"new": 1}

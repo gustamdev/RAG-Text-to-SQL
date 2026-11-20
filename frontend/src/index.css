@@ -35,6 +35,9 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-surface: var(--surface);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-success: var(--success);
 }
 
 :root {
@@ -54,11 +57,15 @@
   --muted-foreground: oklch(0.53 0 0);
   --accent: oklch(0.94 0 0);
   --accent-foreground: oklch(0.145 0 0);
-  --destructive: oklch(0.55 0.2 27);
+  --destructive: oklch(0.3 0 0);
   --destructive-foreground: oklch(1 0 0);
   --border: oklch(0.9 0 0);
   --input: oklch(0.9 0 0);
   --ring: oklch(0.145 0 0);
+  /* Cor de ação única: compra, selos de estoque baixo, contador do carrinho. Texto branco >= 4,5:1. */
+  --brand: oklch(0.2 0 0);
+  --brand-foreground: oklch(1 0 0);
+  --success: oklch(0.4 0 0);
 }
 
 @layer base {
@@ -94,9 +101,105 @@
   text-transform: uppercase;
 }
 
+@utility btn-brand {
+  background-color: var(--brand);
+  color: var(--brand-foreground);
+  font-weight: 700;
+  &:hover {
+    background-color: oklch(0.3 0 0);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+}
+
 @utility no-scrollbar {
   scrollbar-width: none;
   &::-webkit-scrollbar {
     display: none;
   }
+}
+
+/*
+ * Avisos (sonner). Posição: variáveis lidas pelo <Toaster> (components/ui/sonner.tsx).
+ * Mobile: acima do TabBar (3.5rem) e da barra fixa de compra (~4.6rem) + safe-area.
+ * md+: TabBar some; canto inferior direito, sem cobrir header nem menu.
+ * Sem cor: tipo = ícone + peso do título + espessura da barra lateral.
+ * Seletores com 3 atributos para vencer o CSS que o sonner injeta em runtime.
+ */
+:root {
+  --toast-bottom: calc(env(safe-area-inset-bottom) + 8.75rem);
+  --toast-side: 1rem;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --toast-bottom: 1.5rem;
+    --toast-side: 1.5rem;
+  }
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  --border-radius: 0px;
+  gap: 0.75rem;
+  padding: 0.75rem 0.5rem 0.75rem 1rem;
+  border: 1px solid var(--foreground);
+  border-left-width: 3px;
+  border-radius: 0;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: none;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"][data-type="success"] { border-left-width: 6px; border-left-color: oklch(0.5 0 0); }
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"][data-type="warning"] { border-left-width: 8px; border-left-color: oklch(0.3 0 0); }
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"][data-type="error"] { border-width: 2px; border-left-width: 12px; }
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-title] { font-weight: 600; line-height: 1.4; }
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"][data-type="error"] [data-title] { font-weight: 800; }
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-description] { color: var(--muted-foreground); font-size: 0.8125rem; }
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-icon] { margin: 0; }
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button] {
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: 0;
+  background: var(--brand);
+  color: var(--brand-foreground);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button]:hover { background: oklch(0.3 0 0); }
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button]:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: none; }
+
+/* Fechar: no fim da linha, sem o selo circular padrão. */
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button],
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:hover [data-close-button]:hover {
+  position: static;
+  order: 99;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--foreground);
+  transform: none;
+}
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:hover [data-close-button]:hover { background: var(--accent); }
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible { outline: 2px solid var(--ring); box-shadow: none; }
+
+@media (pointer: coarse) {
+  [data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button] { height: 2.75rem; }
+  [data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button] { width: 2.75rem; height: 2.75rem; }
 }

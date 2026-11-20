@@ -4,7 +4,7 @@ import asyncio
 import json
 import stat
 import time
-from datetime import datetime
+from datetime import date, datetime
 
 import duckdb
 import mongomock
@@ -102,7 +102,34 @@ def _order(order_id: str, customer_id: str | None, state: str = "paid", total: i
 
 def _seed_orders(client) -> None:
     db = client[settings.MONGO_DB_NAME]
+    db["shop_products"].insert_many([
+        {"product_id": "p1", "title": "Cama mesa banho · Modelo P1", "category": "cama_mesa_banho",
+         "price_cents": 8990, "stock": 0},
+        {"product_id": "p2", "title": "Cama mesa banho · Modelo P2", "category": "cama_mesa_banho",
+         "price_cents": 1000, "stock": 3},
+    ])  # fmt: skip
     db["shop_orders"].insert_many([_order("a" * 32, "c1"), _order("b" * 32, "c2", "refused"), _order("c" * 32, None)])
+    db["shop_orders"].insert_one(
+        {
+            **_order("e" * 32, "c1", "canceled"),
+            "canceled_at": datetime(2026, 11, 14, 9, 0),
+            "cancel_reason": "changed_mind",
+            "canceled_from": "paid",
+            "refund_cents": 19820,
+        }
+    )
+    db["shop_payments"].insert_one(
+        {
+            "payment_id": "pay_e",
+            "order_id": "e" * 32,
+            "customer_id": "c1",
+            "status": "approved",
+            "brand": "visa",
+            "amount_cents": 19820,
+            "created_at": datetime(2026, 11, 13, 18, 21),
+            "refund": {"amount_cents": 19820, "at": datetime(2026, 11, 14, 9, 0)},
+        }
+    )
     db["shop_payments"].insert_one(
         {
             "payment_id": "pay1",
@@ -159,8 +186,22 @@ def test_view_values_are_projected(engine):
     assert row["destination_zip3"] == "013" and row["destination_state"] == "SP"
     assert str(row["order_date"]) == "2026-11-13" and row["items_qty"] == 2
     assert len(row["customer_pseudo"]) == 32 and row["customer_pseudo"] != "c1"
-    (payment,) = _rows(engine, "select card_brand, amount_cents from shop_payments_view")
+    (payment,) = _rows(engine, "select card_brand, amount_cents from shop_payments_view where payment_id = 'pay1'")
     assert payment == ("visa", 19820)
+    (canceled,) = _rows(
+        engine,
+        "select status, canceled_date, cancel_reason, canceled_from_status, refund_cents "
+        "from shop_orders_view where order_id = '" + "e" * 32 + "'",
+    )
+    assert canceled == ("canceled", date(2026, 11, 14), "changed_mind", "paid", 19820)
+    (legacy,) = _rows(
+        engine, "select cancel_reason, refund_cents from shop_orders_view where order_id = '" + "a" * 32 + "'"
+    )
+    assert legacy == (None, None)  # pedido legado sem os campos novos
+    assert _rows(engine, "select refund_cents from shop_payments_view where order_id = '" + "e" * 32 + "'") == [
+        (19820,)
+    ]
+    assert _rows(engine, "select count(*) from shop_order_items_view where order_id = '" + "e" * 32 + "'") == [(1,)]
 
 
 def test_deleted_customer_absent_after_refresh(tmp_path, mongo):
@@ -189,12 +230,12 @@ def test_snapshot_file_is_0600(tmp_path, mongo):
 
 
 def test_new_order_visible_to_agent_after_rebuild(tmp_path, mongo, engine):
-    assert _rows(engine, "select count(*) from shop_orders_view") == [(3,)]
+    assert _rows(engine, "select count(*) from shop_orders_view") == [(4,)]
     mongo[settings.MONGO_DB_NAME]["shop_orders"].insert_one(_order("d" * 32, "c1"))
     build_snapshot(mongo, engine.path)
-    assert _rows(engine, "select count(*) from shop_orders_view") == [(3,)]  # ainda o arquivo antigo
+    assert _rows(engine, "select count(*) from shop_orders_view") == [(4,)]  # ainda o arquivo antigo
     asyncio.run(engine.reload())
-    assert _rows(engine, "select count(*) from shop_orders_view") == [(4,)]
+    assert _rows(engine, "select count(*) from shop_orders_view") == [(5,)]
     assert {"shop_orders_view", "orders"} <= engine.tables
 
 
@@ -213,7 +254,7 @@ def test_in_flight_query_survives_swap(tmp_path, mongo, engine):
 
     _, rows, _ = asyncio.run(scenario())
     assert rows[0][0] > 0
-    assert _rows(engine, "select count(*) from shop_orders_view") == [(3,)]
+    assert _rows(engine, "select count(*) from shop_orders_view") == [(4,)]
 
 
 class FakeEngine:
@@ -299,6 +340,11 @@ def _column(name: str) -> dict:
     return {"column_name": name, "data_type": "string", "description": "d", "semantic_role": "r", "confidence": "high"}
 
 
+class _TokenLLM(FakeListChatModel):
+    def get_num_tokens(self, text: str) -> int:
+        return len(text.split())
+
+
 class RecordingLLM(FakeListChatModel):
     canned: dict = {}
     prompts: list = []
@@ -347,7 +393,7 @@ def test_pii_filter_masks_email_and_full_cep():
 
 def test_session_memory_keeps_no_raw_email_or_cep():
     memory = MemoryService(
-        FakeListChatModel(responses=["x"]), max_turns=100, context_max_tokens=10_000, ttl_s=60, max_sessions=10
+        _TokenLLM(responses=["x"]), max_turns=100, context_max_tokens=10_000, ttl_s=60, max_sessions=10
     )
 
     async def run():
@@ -361,7 +407,7 @@ def test_session_memory_keeps_no_raw_email_or_cep():
 
 
 def test_shop_golden_dataset_is_small_and_clean():
-    assert len(SHOP_GOLDEN) == 5
+    assert len(SHOP_GOLDEN) == 12
     for row in SHOP_GOLDEN:
         assert set(row["tables"]) <= SHOP_VIEW_TABLES
         assert redact(row["question"] + row["answer"]) == row["question"] + row["answer"]
@@ -400,3 +446,8 @@ def test_admin_snapshot_routes_require_admin(app, client, auth_db):
         assert res.status_code == 200 and res.json()["builds"] == 1 and fake.refreshed == 1
     finally:
         del app.state.snapshot_service
+
+
+def test_products_view_exposes_stock_and_availability(engine):
+    rows = _rows(engine, "select product_id, stock, in_stock from shop_products_view order by product_id")
+    assert rows == [("p1", 0, False), ("p2", 3, True)]

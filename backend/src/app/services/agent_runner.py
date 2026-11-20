@@ -13,6 +13,7 @@ import uuid
 from langgraph.graph.state import CompiledStateGraph
 
 from app.core.pii import redact
+from app.database.repos.chat_threads import ChatThreadsRepo
 from app.prompts import SQLAgentOutput
 from app.schemas.chat import AgentEvent
 from app.schemas.query import QueryResult
@@ -79,9 +80,19 @@ def _describe(node: str, update: dict | None) -> AgentEvent:
 
 
 class AgentRunner:
-    def __init__(self, graph: CompiledStateGraph, memory: MemoryService, *, ttl_s: float, max_results: int):
+    def __init__(
+        self,
+        graph: CompiledStateGraph,
+        memory: MemoryService,
+        *,
+        ttl_s: float,
+        max_results: int,
+        threads: ChatThreadsRepo | None = None,
+    ):
         self.graph = graph
         self.memory = memory
+        # Histórico durável das conversas (Mongo). Opcional: sem ele o agente roda só com a memória em processo.
+        self.threads = threads
         self.ttl_s = ttl_s
         self.max_results = max_results
         # Cada execução tem seu histórico (para quem conectar atrasado) e uma fila para quem
@@ -112,7 +123,9 @@ class AgentRunner:
         self._stored_at[question_id] = time.monotonic()
         self._owners[question_id] = user_id
 
-        task = asyncio.create_task(self._run(question, question_id, self.session_key(user_id, session_id)))
+        task = asyncio.create_task(
+            self._run(question, question_id, self.session_key(user_id, session_id), user_id, session_id)
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return question_id, session_id
@@ -143,7 +156,14 @@ class AgentRunner:
             if event.done:
                 return
 
-    async def _run(self, question: str, question_id: str, session_id: str) -> None:
+    async def _run(
+        self,
+        question: str,
+        question_id: str,
+        session_id: str,
+        user_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> None:
         # run_name + metadata: no LangSmith, cada pergunta vira um trace próprio, com esse
         # question_id — é o que liga um erro na tela ("Ocorreu um erro...") ao traceback real.
         config = {
@@ -155,6 +175,7 @@ class AgentRunner:
         answer: str | None = None
         tool_notes: dict[str, str] = {}
         try:
+            await self._rehydrate(session_id, user_id, thread_id)
             context = await self.memory.render_context(session_id)
         except Exception:
             # Memória nunca pode impedir a pergunta de ser respondida: segue sem contexto.
@@ -170,6 +191,12 @@ class AgentRunner:
                     tool_notes["tabelas"] = event.detail
                 elif node == "execute_sql" and event.detail:
                     tool_notes["consulta"] = event.detail
+                    # Primeiras linhas (já pseudonimizadas pelas views, redigidas aqui): é o que deixa
+                    # "essa compra"/"o mesmo cliente" apontar para o registro certo na próxima pergunta.
+                    result: QueryResult | None = value.get("query_result") if value else None
+                    if result is not None and result.status == "succeeded" and result.rows:
+                        sample = [dict(zip(result.columns, map(str, row), strict=False)) for row in result.rows[:3]]
+                        tool_notes["amostra"] = redact(str(sample))[:MAX_DETAIL_CHARS]
                 self._history[question_id].append(event)
                 self._queues[question_id].put_nowait(event)
                 if event.done:
@@ -192,7 +219,30 @@ class AgentRunner:
                     await self.memory.record_turn(session_id, question, answer, tool_note=tool_note)
                 except Exception:
                     logger.exception("Falha ao gravar memória da sessão %s (resposta já entregue).", session_id)
+                await self._save_thread(question_id, question, answer, user_id, thread_id)
             self._queues[question_id].put_nowait(None)
+
+    async def _rehydrate(self, session_id: str, user_id: str | None, thread_id: str | None) -> None:
+        """Thread reaberta depois de restart/reload/TTL: a memória em processo está vazia, mas a
+        conversa está no Mongo. Repõe os últimos turnos para o agente continuar de onde parou."""
+        if not (self.threads and user_id and thread_id) or self.memory.has(session_id):
+            return
+        thread = await self.threads.get(user_id, thread_id)
+        if thread:
+            self.memory.seed(session_id, [(m["question"], m["answer"]) for m in thread["messages"]])
+
+    async def _save_thread(
+        self, question_id: str, question: str, answer: str, user_id: str | None, thread_id: str | None
+    ) -> None:
+        if not (self.threads and user_id and thread_id):
+            return
+        steps = [e.model_dump() for e in self._history.get(question_id, []) if not e.done]
+        try:
+            await self.threads.add_turn(
+                user_id, thread_id, question_id=question_id, question=question, answer=answer, steps=steps
+            )
+        except Exception:
+            logger.exception("Falha ao salvar a conversa %s (resposta já entregue).", thread_id)
 
     def _evict(self) -> None:
         now = time.monotonic()

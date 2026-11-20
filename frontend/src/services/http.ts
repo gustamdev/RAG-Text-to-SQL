@@ -1,12 +1,15 @@
-// Cliente HTTP único do Olist Insights: base /api/v1 (proxy do Vite em dev), e erros tipados.
+// Cliente HTTP da loja: base /api/v1 (proxy do Vite em dev), token Bearer da loja e erros tipados.
+import { UNAUTHORIZED_EVENT, getToken, clearToken } from '@/lib/session'
 
 export const API_BASE = '/api/v1'
 
 export class ApiError extends Error {
   readonly status: number
+  readonly payload: unknown
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, payload?: unknown) {
     super(message)
+    this.payload = payload
     this.name = 'ApiError'
     this.status = status
   }
@@ -19,6 +22,9 @@ interface RequestOptions {
   body?: unknown
   params?: Params
   signal?: AbortSignal
+  headers?: Record<string, string>
+  /** 401 de reautenticação (senha incorreta) não é sessão vencida: mantém o token. */
+  skipAuthReset?: boolean
 }
 
 function buildUrl(path: string, params?: Params): string {
@@ -44,8 +50,10 @@ export function messageFrom(status: number, payload: unknown): string {
 }
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, params, signal } = options
-  const headers: Record<string, string> = {}
+  const { method = 'GET', body, params, signal, skipAuthReset = false } = options
+  const headers: Record<string, string> = { ...options.headers }
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
   let response: Response
@@ -69,7 +77,12 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, messageFrom(response.status, payload))
+    // Sessão vencida/revogada: limpa o token; os rotas protegidas redirecionam para /entrar.
+    if (response.status === 401 && token && !skipAuthReset && path !== '/shop/auth/login/verify-otp' && path !== '/shop/auth/verify-otp') {
+      clearToken()
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+    }
+    throw new ApiError(response.status, messageFrom(response.status, payload), payload)
   }
   return payload as T
 }
