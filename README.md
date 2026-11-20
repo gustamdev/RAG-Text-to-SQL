@@ -1,20 +1,69 @@
-# RAG-TEXT-TO-SQL
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="RAG-TEXT-TO-SQL" width="96" height="96">
+</p>
 
-[![CI](https://github.com/gustamdev/RAG-Text-to-SQL/actions/workflows/ci.yml/badge.svg)](https://github.com/gustamdev/RAG-Text-to-SQL/actions/workflows/ci.yml)
+<h1 align="center">RAG-TEXT-TO-SQL</h1>
+
+<p align="center">
+  <strong>Projeto completo de e-commerce com análise de dados por IA, sobre um dataset <a href="https://www.olist.com">Olist</a> enriquecido.</strong><br>
+  Loja, backoffice e um assistente Text-to-SQL, sobre FastAPI, MongoDB e DuckDB.
+</p>
+
+<p align="center">
+  <a href="https://github.com/gustamdev/RAG-Text-to-SQL/actions/workflows/ci.yml"><img src="https://github.com/gustamdev/RAG-Text-to-SQL/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-141414?labelColor=333333" alt="Licença MIT"></a>
+  <img src="https://img.shields.io/badge/python-3.13-141414?labelColor=333333" alt="Python 3.13">
+  <img src="https://img.shields.io/badge/node-22-141414?labelColor=333333" alt="Node.js 22">
+  <img src="https://img.shields.io/badge/FastAPI-141414?labelColor=333333" alt="FastAPI">
+  <img src="https://img.shields.io/badge/LangGraph-141414?labelColor=333333" alt="LangGraph">
+  <img src="https://img.shields.io/badge/DuckDB-141414?labelColor=333333" alt="DuckDB">
+  <img src="https://img.shields.io/badge/MongoDB-141414?labelColor=333333" alt="MongoDB">
+  <img src="https://img.shields.io/badge/React-141414?labelColor=333333" alt="React">
+  <img src="https://img.shields.io/badge/TypeScript-141414?labelColor=333333" alt="TypeScript">
+</p>
+
+<p align="center">
+  <a href="#dataset">Dataset</a> ·
+  <a href="#o-que-o-projeto-mostra">Funcionalidades</a> ·
+  <a href="#arquitetura">Arquitetura</a> ·
+  <a href="#como-rodar">Como rodar</a> ·
+  <a href="#api">API</a> ·
+  <a href="#segurança">Segurança</a> ·
+  <a href="#estrutura">Estrutura</a> ·
+  <a href="#licenças">Licenças</a>
+</p>
+
+---
 
 Projeto completo de e-commerce com análise de dados por IA, sobre um dataset [Olist](https://www.olist.com) enriquecido. Três peças, um backend:
 
-- **Loja** (`frontend/`): catálogo com busca e filtros, carrinho, checkout com pagamento **simulado**, conta do cliente com MFA por e-mail, endereços, frete por CEP, pedidos e direitos do titular (LGPD).
-- **Backoffice** (`frontend-admin/`, só administrador): KPIs, produtos e categorias com métricas, pedidos e clientes (com dados pessoais mascarados) e o **assistente de dados**, um agente Text-to-SQL que responde perguntas em linguagem natural gerando e executando SQL de forma segura.
-- **API** (`backend/`): FastAPI em camadas, MongoDB como fonte, DuckDB como snapshot analítico somente leitura.
+| Peça | Pasta | O que faz |
+|---|---|---|
+| 🛍️ **Loja** | `frontend/` | catálogo com busca e filtros, carrinho, checkout com pagamento **simulado**, conta do cliente com MFA por e-mail, endereços, frete por CEP, pedidos e direitos do titular (LGPD). |
+| 📊 **Backoffice** | `frontend-admin/`, só administrador | KPIs, produtos e categorias com métricas, pedidos e clientes (com dados pessoais mascarados) e o **assistente de dados**, um agente Text-to-SQL que responde perguntas em linguagem natural gerando e executando SQL de forma segura. |
+| ⚙️ **API** | `backend/` | FastAPI em camadas, MongoDB como fonte, DuckDB como snapshot analítico somente leitura. |
 
 **Stack:** Python · FastAPI · LangChain · LangGraph · LangSmith · OpenAI · DuckDB · MongoDB · sqlglot · Pydantic · React · TypeScript · Vite · TanStack Query · Tailwind · shadcn/ui · Recharts · Docker · nginx
 
+> [!NOTE]
 > Projeto de portfólio, feito para praticar engenharia de IA e backend com LLM. **Nada é cobrado:** o pagamento é simulado (só cartões de teste) e os dados de clientes, pedidos e produtos são sintéticos.
 
-### Versão só com o assistente
+> [!TIP]
+> **Versão só com o assistente.** O projeto começou como apenas o assistente Text-to-SQL. Essa versão original continua na branch [`assistant-only`](https://github.com/gustamdev/RAG-Text-to-SQL/tree/assistant-only). A `main` é o projeto completo.
 
-O projeto começou como apenas o assistente Text-to-SQL. Essa versão original continua na branch [`assistente-text-to-sql`](https://github.com/gustamdev/RAG-Text-to-SQL/tree/assistente-text-to-sql). A `main` é o projeto completo.
+## Sumário
+
+- [Dataset](#dataset)
+- [O que o projeto mostra](#o-que-o-projeto-mostra)
+- [Arquitetura](#arquitetura)
+- [Termos técnicos do sistema](#termos-técnicos-do-sistema)
+- [Como rodar](#como-rodar)
+- [API](#api)
+- [Testes e qualidade](#testes-e-qualidade)
+- [Decisões e limites](#decisões-e-limites)
+- [Segurança](#segurança)
+- [Estrutura](#estrutura)
+- [Licenças](#licenças)
 
 ## Dataset
 
@@ -24,25 +73,25 @@ Quem clonar este projeto já recebe a base enriquecida: não há nada para baixa
 
 ## O que o projeto mostra
 
-**Agente de dados (LangGraph)**
+### Agente de dados (LangGraph)
 
-- **Grafo orquestrado:** `StateGraph` com roteamento condicional entre triagem, seleção de schema, geração, validação e execução do SQL. Triagem com few-shot separa conversa comum de perguntas que precisam do banco.
-- **Schema linking e catálogo por LLM:** o *prompt optimizer* escolhe só as tabelas e colunas relevantes; cada tabela é descrita uma vez e cacheada.
-- **Structured output com Pydantic** em toda etapa do LLM, com pós-processamento determinístico.
-- **Guardrails de SQL** (`backend/src/app/sql_guard.py`): AST do `sqlglot`; só `SELECT`/`WITH`, tabelas do catálogo, sem funções perigosas, `LIMIT` garantido. Suíte com ataques (CTE escondendo tabela, `COPY`, `read_csv`, `PRAGMA`, múltiplas instruções).
-- **Defesa em profundidade:** DuckDB somente leitura, sem acesso externo, com timeout e limite de concorrência. Tabelas com dados pessoais da loja ficam fora do alcance do agente; ele lê views projetadas sem PII.
-- **Self-correction loop** (3 tentativas), **grounding** (a resposta usa só as linhas retornadas) e hierarquia de instruções contra prompt injection.
-- **Memória de sessão** (buffer + resumo), **histórico de conversas** por administrador, **streaming SSE** por nó do grafo e **feedback 👍/👎** que alimenta um golden dataset.
-- **Observabilidade com LangSmith** (opcional, desligada por padrão).
+- 🕸️ **Grafo orquestrado:** `StateGraph` com roteamento condicional entre triagem, seleção de schema, geração, validação e execução do SQL. Triagem com few-shot separa conversa comum de perguntas que precisam do banco.
+- 🔗 **Schema linking e catálogo por LLM:** o *prompt optimizer* escolhe só as tabelas e colunas relevantes; cada tabela é descrita uma vez e cacheada.
+- 🧱 **Structured output com Pydantic** em toda etapa do LLM, com pós-processamento determinístico.
+- 🛡️ **Guardrails de SQL** (`backend/src/app/sql_guard.py`): AST do `sqlglot`; só `SELECT`/`WITH`, tabelas do catálogo, sem funções perigosas, `LIMIT` garantido. Suíte com ataques (CTE escondendo tabela, `COPY`, `read_csv`, `PRAGMA`, múltiplas instruções).
+- 🔒 **Defesa em profundidade:** DuckDB somente leitura, sem acesso externo, com timeout e limite de concorrência. Tabelas com dados pessoais da loja ficam fora do alcance do agente; ele lê views projetadas sem PII.
+- 🔁 **Self-correction loop** (3 tentativas), **grounding** (a resposta usa só as linhas retornadas) e hierarquia de instruções contra prompt injection.
+- 🧠 **Memória de sessão** (buffer + resumo), **histórico de conversas** por administrador, **streaming SSE** por nó do grafo e **feedback 👍/👎** que alimenta um golden dataset.
+- 🔭 **Observabilidade com LangSmith** (opcional, desligada por padrão).
 
-**Loja**
+### Loja
 
-- **Autenticação de duas audiências:** JWT com `aud=shop` ou `aud=admin`, `jti` e `token_version` (revogação no logout); um token nunca vale no outro lado.
-- **MFA por e-mail:** OTP de 6 dígitos com HMAC e pepper, expiração, limite de tentativas e de envios (persistidos no Mongo). `MAIL_BACKEND=console` imprime o código no log (dev); em produção exige SMTP.
-- **Checkout seguro:** preço, frete e total sempre recalculados no servidor; `Idempotency-Key`; baixa de estoque por decremento condicional atômico (`find_one_and_update` com `$gte` + `$inc`, sem transação); estados do pedido validados no servidor.
-- **Pagamento simulado:** só cartões de teste; o número real é descartado, nada de PAN em log ou banco (guarda bandeira e últimos 4 dígitos).
-- **Frete por localização:** haversine entre o CEP do depósito e o do cliente, mais peso, offline. Consulta de CEP real opcional (BrasilAPI/ViaCEP) no servidor.
-- **LGPD:** exportação e exclusão de conta, textos legais, pseudonimização, PII mascarada no admin, auditoria e retenção. Veja [docs/lgpd-loja.md](docs/lgpd-loja.md) e [docs/seguranca-loja.md](docs/seguranca-loja.md).
+- 🔑 **Autenticação de duas audiências:** JWT com `aud=shop` ou `aud=admin`, `jti` e `token_version` (revogação no logout); um token nunca vale no outro lado.
+- 📧 **MFA por e-mail:** OTP de 6 dígitos com HMAC e pepper, expiração, limite de tentativas e de envios (persistidos no Mongo). `MAIL_BACKEND=console` imprime o código no log (dev); em produção exige SMTP.
+- 🧾 **Checkout seguro:** preço, frete e total sempre recalculados no servidor; `Idempotency-Key`; baixa de estoque por decremento condicional atômico (`find_one_and_update` com `$gte` + `$inc`, sem transação); estados do pedido validados no servidor.
+- 💳 **Pagamento simulado:** só cartões de teste; o número real é descartado, nada de PAN em log ou banco (guarda bandeira e últimos 4 dígitos).
+- 📦 **Frete por localização:** haversine entre o CEP do depósito e o do cliente, mais peso, offline. Consulta de CEP real opcional (BrasilAPI/ViaCEP) no servidor.
+- ⚖️ **LGPD:** exportação e exclusão de conta, textos legais, pseudonimização, PII mascarada no admin, auditoria e retenção. Veja [docs/lgpd-loja.md](docs/lgpd-loja.md) e [docs/seguranca-loja.md](docs/seguranca-loja.md).
 
 ## Arquitetura
 
@@ -53,7 +102,7 @@ Quem clonar este projeto já recebe a base enriquecida: não há nada para baixa
                                      └─► DuckDB (snapshot somente leitura: backoffice e agente)
 ```
 
-Fluxo do agente:
+### Fluxo do agente
 
 ```
 START ─► triage ──chat──► chat ──────────────────────────────► END
@@ -120,7 +169,8 @@ cd frontend && npm ci && npm run dev          # http://localhost:5173
 cd frontend-admin && ln -s ../frontend/node_modules node_modules && npm run dev   # o Vite mostra a porta
 ```
 
-Quando o backend terminar o primeiro start (log "Application startup complete"), rode **uma vez**, em outro terminal, o catálogo da loja. Sem isso a loja fica vazia:
+> [!IMPORTANT]
+> Quando o backend terminar o primeiro start (log "Application startup complete"), rode **uma vez**, em outro terminal, o catálogo da loja. Sem isso a loja fica vazia:
 
 ```bash
 cd backend && uv run python scripts/seed_shop.py
@@ -211,7 +261,7 @@ Os testes do backend rodam sem OpenAI e sem banco real (LLMs simulados, `mongomo
 - Rotas públicas com limite por IP, CORS com lista explícita de métodos e cabeçalhos, cabeçalhos de segurança no nginx (CSP, `X-Frame-Options`, `nosniff`); só o nginx da rede do compose pode informar o IP do cliente.
 - Segredos só no `.env`; com `ENV=prod` o backend recusa segredos curtos e `MAIL_BACKEND=console`.
 
-**Limites conhecidos**
+### Limites conhecidos
 
 - O MongoDB do compose não tem autenticação e só escuta em `127.0.0.1`; em produção use credenciais e rede privada.
 - O JWT fica em `localStorage` (12 h); o ideal em produção é cookie `HttpOnly` com token curto e refresh.
