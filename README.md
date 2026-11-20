@@ -39,7 +39,7 @@ Quem clonar este projeto já recebe a base enriquecida: não há nada para baixa
 
 - **Autenticação de duas audiências:** JWT com `aud=shop` ou `aud=admin`, `jti` e `token_version` (revogação no logout); um token nunca vale no outro lado.
 - **MFA por e-mail:** OTP de 6 dígitos com HMAC e pepper, expiração, limite de tentativas e de envios (persistidos no Mongo). `MAIL_BACKEND=console` imprime o código no log (dev); em produção exige SMTP.
-- **Checkout seguro:** preço, frete e total sempre recalculados no servidor; `Idempotency-Key`; estoque reservado com operações atômicas; estados do pedido validados no servidor.
+- **Checkout seguro:** preço, frete e total sempre recalculados no servidor; `Idempotency-Key`; baixa de estoque por decremento condicional atômico (`find_one_and_update` com `$gte` + `$inc`, sem transação); estados do pedido validados no servidor.
 - **Pagamento simulado:** só cartões de teste; o número real é descartado, nada de PAN em log ou banco (guarda bandeira e últimos 4 dígitos).
 - **Frete por localização:** haversine entre o CEP do depósito e o do cliente, mais peso, offline. Consulta de CEP real opcional (BrasilAPI/ViaCEP) no servidor.
 - **LGPD:** exportação e exclusão de conta, textos legais, pseudonimização, PII mascarada no admin, auditoria e retenção. Veja [docs/lgpd-loja.md](docs/lgpd-loja.md) e [docs/seguranca-loja.md](docs/seguranca-loja.md).
@@ -74,6 +74,29 @@ START ─► triage ──chat──► chat ───────────�
 - **DuckDB** é um snapshot analítico gerado a partir do Mongo; é onde rodam o SQL do agente e as consultas do backoffice (constantes e parametrizadas, sem LLM).
 - **Imagens de produto** ficam num blob storage local (`backend/data/blobstore`), servidas em `/media`.
 
+## Termos técnicos do sistema
+
+| Termo | Onde e como aparece |
+|---|---|
+| **Text-to-SQL com LangGraph** | `agent_graph.py`: `StateGraph` com nós de triagem, `optimize` (schema linking), `generate_sql`, `validate_sql`, `execute_sql` e `finalize`, com arestas condicionais e laços de retry |
+| **Schema linking** | o *prompt optimizer* reescreve a pergunta e seleciona só as tabelas e colunas relevantes antes de gerar o SQL |
+| **Structured output** | contratos Pydantic v2 em cada etapa do LLM (`prompts.py`); perfis de modelo por tarefa em `llm_models.py` (LangChain + `langchain-openai`) |
+| **Validação por AST** | `sql_guard.py` usa `sqlglot` para aceitar só leitura (`SELECT`/`WITH`), com allowlist de tabelas e `LIMIT` forçado |
+| **DuckDB somente leitura** | conexão `read_only=True` com `enable_external_access: False`, timeout e limite de concorrência (`sql_engine.py`) |
+| **Snapshot atômico** | o DuckDB é gerado a partir do Mongo num arquivo temporário e trocado com `os.replace` |
+| **Views sem PII para o agente** | `shop_views.py`: cliente pseudonimizado (`PSEUDONYM_KEY`), CEP reduzido a 3 dígitos, sem texto livre |
+| **Self-correction loop** | erro de validação ou de execução volta ao LLM como feedback, com orçamento de 3 tentativas |
+| **SSE** | `GET /chat/questions/{id}/events` via `StreamingResponse`: um evento por nó do grafo |
+| **JWT por audiência** | PyJWT; claims `aud` (`shop`/`admin`), `jti`, `tv` comparado com `token_version` do cliente |
+| **argon2id** | `argon2-cffi`, com hash descartável para equalizar o tempo de resposta quando o e-mail não existe |
+| **OTP com HMAC** | código de 6 dígitos com *pepper* (`OTP_PEPPER`), expiração, limite de tentativas e de envios, índices TTL no Mongo |
+| **Idempotência** | cabeçalho `Idempotency-Key` no checkout, com índice único por cliente e hash do corpo |
+| **Rate limiting** | `SlidingWindowLimiter` (janela deslizante) e `FailureLimiter` (falhas de login), em memória por processo |
+| **Frete haversine** | `services/freight.py`: distância entre prefixos de CEP (tabela `geolocation`) mais peso; CEP real opcional (BrasilAPI/ViaCEP) |
+| **LGPD** | exportação (`export`), anonimização na exclusão, `erase_inactive` e rotina de retenção (`shop_retention.py`) |
+| **Defesa de borda** | nginx sem root com CSP, `X-Frame-Options` e `nosniff`; `--proxy-headers` com `FORWARDED_ALLOW_IPS` restrito à sub-rede do compose |
+| **Build** | Dockerfile multi-stage com `uv` e `uv.lock` (`--frozen`); `pymongo` async; testes com `mongomock-motor` |
+
 ## Como rodar
 
 Requisitos: Python 3.13, [uv](https://docs.astral.sh/uv/), Node.js 22, Docker e uma chave da OpenAI (só o assistente precisa dela).
@@ -88,7 +111,7 @@ cd RAG-Text-to-SQL
 cd backend
 cp .env.example .env     # preencha OPENAI_API_KEY; o resto funciona com o padrão em dev
 uv sync
-uv run python run.py     # 1º start: baixa a base, popula o Mongo e gera o DuckDB (leva alguns minutos)
+uv run python run.py     # 1º start: baixa a base, popula o Mongo e gera o DuckDB
 
 # Loja (outro terminal)
 cd frontend && npm ci && npm run dev          # http://localhost:5173
@@ -185,7 +208,7 @@ Os testes do backend rodam sem OpenAI e sem banco real (LLMs simulados, `mongomo
 - Tokens com audiência, `jti` e revogação; papel conferido no banco a cada requisição; chat e backoffice só para administrador, com limite de perguntas (custo de LLM).
 - SQL do agente: validador por AST, allowlist, motor somente leitura, timeout e limite de linhas. SQL do backoffice: placeholders e ordenação por allowlist.
 - Corpos de entrada rejeitam campos desconhecidos; o cliente nunca envia preço, total, frete ou estado do pedido.
-- Rotas públicas com limite por IP, CORS restrito a `GET`/`POST`, cabeçalhos de segurança no nginx (CSP, `X-Frame-Options`, `nosniff`); só o nginx da rede do compose pode informar o IP do cliente.
+- Rotas públicas com limite por IP, CORS com lista explícita de métodos e cabeçalhos, cabeçalhos de segurança no nginx (CSP, `X-Frame-Options`, `nosniff`); só o nginx da rede do compose pode informar o IP do cliente.
 - Segredos só no `.env`; com `ENV=prod` o backend recusa segredos curtos e `MAIL_BACKEND=console`.
 
 **Limites conhecidos**
