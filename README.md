@@ -5,8 +5,8 @@
 <h1 align="center">RAG-TEXT-TO-SQL</h1>
 
 <p align="center">
-  <strong>Projeto completo de e-commerce com análise de dados por IA, sobre um dataset <a href="https://www.olist.com">Olist</a> enriquecido.</strong><br>
-  Loja, backoffice e um assistente Text-to-SQL, sobre FastAPI, MongoDB e DuckDB.
+  <strong>Assistente de dados Text-to-SQL: um agente LangGraph que responde perguntas em linguagem natural gerando e executando SQL de forma segura.</strong><br>
+  Uma loja online sobre um dataset <a href="https://www.olist.com">Olist</a> enriquecido serve de suporte: gera dados que mudam a cada compra para mostrar como o agente trabalha.
 </p>
 
 <p align="center">
@@ -23,9 +23,9 @@
 </p>
 
 <p align="center">
-  <a href="#dataset">Dataset</a> ·
   <a href="#o-que-o-projeto-mostra">Funcionalidades</a> ·
   <a href="#arquitetura">Arquitetura</a> ·
+  <a href="#dataset">Dataset</a> ·
   <a href="#como-rodar">Como rodar</a> ·
   <a href="#api">API</a> ·
   <a href="#segurança">Segurança</a> ·
@@ -35,13 +35,13 @@
 
 ---
 
-Projeto completo de e-commerce com análise de dados por IA, sobre um dataset [Olist](https://www.olist.com) enriquecido. Três peças, um backend:
+O foco do projeto é o **assistente de dados**, um agente Text-to-SQL. A loja online é apenas um suporte: ela gera dados que mudam a cada compra para mostrar a dinâmica do agente e como ele trabalha. Três peças, um backend:
 
-| Peça | Pasta | O que faz |
+| Peça | Pasta | Papel |
 |---|---|---|
-| 🛍️ **Loja** | `frontend/` | catálogo com busca e filtros, carrinho, checkout com pagamento **simulado**, conta do cliente com MFA por e-mail, endereços, frete por CEP, pedidos e direitos do titular (LGPD). |
-| 📊 **Backoffice** | `frontend-admin/`, só administrador | KPIs, produtos e categorias com métricas, pedidos e clientes (com dados pessoais mascarados) e o **assistente de dados**, um agente Text-to-SQL que responde perguntas em linguagem natural gerando e executando SQL de forma segura. |
-| ⚙️ **API** | `backend/` | FastAPI em camadas, MongoDB como fonte, DuckDB como snapshot analítico somente leitura. |
+| **Assistente de dados** (backoffice) | `frontend-admin/`, só administrador | O assistente de dados, um agente Text-to-SQL que responde perguntas em linguagem natural gerando e executando SQL de forma segura. Ao lado dele, KPIs, produtos e categorias com métricas, pedidos e clientes (com dados pessoais mascarados). |
+| **Loja** (suporte) | `frontend/` | catálogo com busca e filtros, carrinho, checkout com pagamento **simulado**, conta do cliente com MFA por e-mail, endereços, frete por CEP, pedidos e direitos do titular (LGPD). |
+| **API** | `backend/` | FastAPI em camadas, MongoDB como fonte, DuckDB como snapshot analítico somente leitura. |
 
 **Stack:** Python · FastAPI · LangChain · LangGraph · LangSmith · OpenAI · DuckDB · MongoDB · sqlglot · Pydantic · React · TypeScript · Vite · TanStack Query · Tailwind · shadcn/ui · Recharts · Docker · nginx
 
@@ -51,11 +51,15 @@ Projeto completo de e-commerce com análise de dados por IA, sobre um dataset [O
 > [!TIP]
 > **Versão só com o assistente.** O projeto começou como apenas o assistente Text-to-SQL. Essa versão original continua na branch [`assistant-only`](https://github.com/gustamdev/RAG-Text-to-SQL/tree/assistant-only). A `main` é o projeto completo.
 
+<p align="center">
+  <img src="docs/screenshots/assistente-dados.png" alt="Assistente de dados no backoffice: pergunta sobre o histórico do Olist, etapas do agente (intenção, tabelas selecionadas, SQL gerado, validação e execução) e a resposta final" width="900">
+</p>
+
 ## Sumário
 
-- [Dataset](#dataset)
 - [O que o projeto mostra](#o-que-o-projeto-mostra)
 - [Arquitetura](#arquitetura)
+- [Dataset](#dataset)
 - [Termos técnicos do sistema](#termos-técnicos-do-sistema)
 - [Como rodar](#como-rodar)
 - [API](#api)
@@ -65,33 +69,33 @@ Projeto completo de e-commerce com análise de dados por IA, sobre um dataset [O
 - [Estrutura](#estrutura)
 - [Licenças](#licenças)
 
-## Dataset
-
-O seed baixa os CSVs do repositório [Olist-E-Commerce-Public-Dataset-2017-2018](https://github.com/gustamdev/Olist-E-Commerce-Public-Dataset-2017-2018), cuja `main` traz o **dataset enriquecido** que este projeto usa: esquema e distribuições da Olist real, mais produtos nomeados, clientes, pedidos, pagamentos e avaliações sintéticos, cobrindo ~24 meses até 16/11/2026. O recorte original (2017/2018, dados reais) ficou na branch `dataset-original-2017-2018` desse repositório. Detalhes no README dele.
-
-Quem clonar este projeto já recebe a base enriquecida: não há nada para baixar à mão. Para regenerar a base: `cd backend && uv run python scripts/enrich_olist.py --src data/olist --out data/enriched` (precisa do recorte original em `data/olist`).
-
 ## O que o projeto mostra
 
 ### Agente de dados (LangGraph)
 
-- 🕸️ **Grafo orquestrado:** `StateGraph` com roteamento condicional entre triagem, seleção de schema, geração, validação e execução do SQL. Triagem com few-shot separa conversa comum de perguntas que precisam do banco.
-- 🔗 **Schema linking e catálogo por LLM:** o *prompt optimizer* escolhe só as tabelas e colunas relevantes; cada tabela é descrita uma vez e cacheada.
-- 🧱 **Structured output com Pydantic** em toda etapa do LLM, com pós-processamento determinístico.
-- 🛡️ **Guardrails de SQL** (`backend/src/app/sql_guard.py`): AST do `sqlglot`; só `SELECT`/`WITH`, tabelas do catálogo, sem funções perigosas, `LIMIT` garantido. Suíte com ataques (CTE escondendo tabela, `COPY`, `read_csv`, `PRAGMA`, múltiplas instruções).
-- 🔒 **Defesa em profundidade:** DuckDB somente leitura, sem acesso externo, com timeout e limite de concorrência. Tabelas com dados pessoais da loja ficam fora do alcance do agente; ele lê views projetadas sem PII.
-- 🔁 **Self-correction loop** (3 tentativas), **grounding** (a resposta usa só as linhas retornadas) e hierarquia de instruções contra prompt injection.
-- 🧠 **Memória de sessão** (buffer + resumo), **histórico de conversas** por administrador, **streaming SSE** por nó do grafo e **feedback 👍/👎** que alimenta um golden dataset.
-- 🔭 **Observabilidade com LangSmith** (opcional, desligada por padrão).
+- **Grafo orquestrado:** `StateGraph` com roteamento condicional entre triagem, seleção de schema, geração, validação e execução do SQL. Triagem com few-shot separa conversa comum de perguntas que precisam do banco.
+- **Schema linking e catálogo por LLM:** o *prompt optimizer* escolhe só as tabelas e colunas relevantes; cada tabela é descrita uma vez e cacheada.
+- **Structured output com Pydantic** em toda etapa do LLM, com pós-processamento determinístico.
+- **Guardrails de SQL** (`backend/src/app/sql_guard.py`): AST do `sqlglot`; só `SELECT`/`WITH`, tabelas do catálogo, sem funções perigosas, `LIMIT` garantido. Suíte com ataques (CTE escondendo tabela, `COPY`, `read_csv`, `PRAGMA`, múltiplas instruções).
+- **Defesa em profundidade:** DuckDB somente leitura, sem acesso externo, com timeout e limite de concorrência. Tabelas com dados pessoais da loja ficam fora do alcance do agente; ele lê views projetadas sem PII.
+- **Self-correction loop** (3 tentativas), **grounding** (a resposta usa só as linhas retornadas) e hierarquia de instruções contra prompt injection.
+- **Memória de sessão** (buffer + resumo), **histórico de conversas** por administrador, **streaming SSE** por nó do grafo e **feedback positivo ou negativo** que alimenta um golden dataset.
+- **Observabilidade com LangSmith** (opcional, desligada por padrão).
 
-### Loja
+### Loja (suporte ao assistente)
 
-- 🔑 **Autenticação de duas audiências:** JWT com `aud=shop` ou `aud=admin`, `jti` e `token_version` (revogação no logout); um token nunca vale no outro lado.
-- 📧 **MFA por e-mail:** OTP de 6 dígitos com HMAC e pepper, expiração, limite de tentativas e de envios (persistidos no Mongo). `MAIL_BACKEND=console` imprime o código no log (dev); em produção exige SMTP.
-- 🧾 **Checkout seguro:** preço, frete e total sempre recalculados no servidor; `Idempotency-Key`; baixa de estoque por decremento condicional atômico (`find_one_and_update` com `$gte` + `$inc`, sem transação); estados do pedido validados no servidor.
-- 💳 **Pagamento simulado:** só cartões de teste; o número real é descartado, nada de PAN em log ou banco (guarda bandeira e últimos 4 dígitos).
-- 📦 **Frete por localização:** haversine entre o CEP do depósito e o do cliente, mais peso, offline. Consulta de CEP real opcional (BrasilAPI/ViaCEP) no servidor.
-- ⚖️ **LGPD:** exportação e exclusão de conta, textos legais, pseudonimização, PII mascarada no admin, auditoria e retenção. Veja [docs/lgpd-loja.md](docs/lgpd-loja.md) e [docs/seguranca-loja.md](docs/seguranca-loja.md).
+- **Autenticação de duas audiências:** JWT com `aud=shop` ou `aud=admin`, `jti` e `token_version` (revogação no logout); um token nunca vale no outro lado.
+- **MFA por e-mail:** OTP de 6 dígitos com HMAC e pepper, expiração, limite de tentativas e de envios (persistidos no Mongo). `MAIL_BACKEND=console` imprime o código no log (dev); em produção exige SMTP.
+- **Checkout seguro:** preço, frete e total sempre recalculados no servidor; `Idempotency-Key`; baixa de estoque por decremento condicional atômico (`find_one_and_update` com `$gte` + `$inc`, sem transação); estados do pedido validados no servidor.
+- **Pagamento simulado:** só cartões de teste; o número real é descartado, nada de PAN em log ou banco (guarda bandeira e últimos 4 dígitos).
+- **Frete por localização:** haversine entre o CEP do depósito e o do cliente, mais peso, offline. Consulta de CEP real opcional (BrasilAPI/ViaCEP) no servidor.
+- **LGPD:** exportação e exclusão de conta, textos legais, pseudonimização, PII mascarada no admin, auditoria e retenção. Veja [docs/lgpd-loja.md](docs/lgpd-loja.md) e [docs/seguranca-loja.md](docs/seguranca-loja.md).
+
+A loja é o que mantém os dados vivos: cada compra muda estoque e pedidos, e o agente enxerga a mudança no próximo snapshot do DuckDB (com debounce do serviço). Perguntas sobre os pedidos de hoje refletem o que acabou de acontecer na loja.
+
+<p align="center">
+  <img src="docs/screenshots/assistente-loja.png" alt="O assistente consultando os pedidos que a loja recebeu hoje, com status e valor de cada um" width="900">
+</p>
 
 ## Arquitetura
 
@@ -122,6 +126,12 @@ START ─► triage ──chat──► chat ───────────�
 - **MongoDB** é a fonte: no primeiro start o backend baixa os CSVs e popula as coleções Olist; a loja usa coleções `shop_*` separadas.
 - **DuckDB** é um snapshot analítico gerado a partir do Mongo; é onde rodam o SQL do agente e as consultas do backoffice (constantes e parametrizadas, sem LLM).
 - **Imagens de produto** ficam num blob storage local (`backend/data/blobstore`), servidas em `/media`.
+
+## Dataset
+
+O seed baixa os CSVs do repositório [Olist-E-Commerce-Public-Dataset-2017-2018](https://github.com/gustamdev/Olist-E-Commerce-Public-Dataset-2017-2018), cuja `main` traz o **dataset enriquecido** que este projeto usa: esquema e distribuições da Olist real, mais produtos nomeados, clientes, pedidos, pagamentos e avaliações sintéticos, cobrindo ~24 meses até 16/11/2026. O recorte original (2017/2018, dados reais) ficou na branch `dataset-original-2017-2018` desse repositório. Detalhes no README dele.
+
+Quem clonar este projeto já recebe a base enriquecida: não há nada para baixar à mão. Para regenerar a base: `cd backend && uv run python scripts/enrich_olist.py --src data/olist --out data/enriched` (precisa do recorte original em `data/olist`).
 
 ## Termos técnicos do sistema
 
@@ -240,7 +250,7 @@ cd frontend-admin && npx oxlint && npm test && npm run build
 
 Os testes do backend rodam sem OpenAI e sem banco real (LLMs simulados, `mongomock-motor`, DuckDB temporário); os de integração têm o marcador `integration` e não rodam por padrão. O CI (GitHub Actions) roda os três jobs a cada push na `main` e em pull requests.
 
-**Avaliação do agente:** o golden dataset (👍/👎) alimenta `tests/test_golden_regression.py`, que repergunta cada item ao agente real (`-m integration`, precisa de Mongo, DuckDB e `OPENAI_API_KEY`) e imprime a resposta antiga ao lado da nova. Ainda não há avaliador automático de acurácia.
+**Avaliação do agente:** o golden dataset (feedback positivo ou negativo) alimenta `tests/test_golden_regression.py`, que repergunta cada item ao agente real (`-m integration`, precisa de Mongo, DuckDB e `OPENAI_API_KEY`) e imprime a resposta antiga ao lado da nova. Ainda não há avaliador automático de acurácia.
 
 ## Decisões e limites
 
