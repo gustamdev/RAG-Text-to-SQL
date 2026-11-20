@@ -88,8 +88,7 @@ cd RAG-Text-to-SQL
 cd backend
 cp .env.example .env     # preencha OPENAI_API_KEY; o resto funciona com o padrão em dev
 uv sync
-uv run python scripts/seed_shop.py   # monta o catálogo da loja (depois do primeiro start)
-uv run python run.py
+uv run python run.py     # 1º start: baixa a base, popula o Mongo e gera o DuckDB (leva alguns minutos)
 
 # Loja (outro terminal)
 cd frontend && npm ci && npm run dev          # http://localhost:5173
@@ -97,6 +96,14 @@ cd frontend && npm ci && npm run dev          # http://localhost:5173
 # Backoffice (outro terminal; reaproveita os node_modules da loja)
 cd frontend-admin && ln -s ../frontend/node_modules node_modules && npm run dev   # o Vite mostra a porta
 ```
+
+Quando o backend terminar o primeiro start (log "Application startup complete"), rode **uma vez**, em outro terminal, o catálogo da loja. Sem isso a loja fica vazia:
+
+```bash
+cd backend && uv run python scripts/seed_shop.py
+```
+
+**De onde vem a base:** no primeiro start o backend baixa sozinho os CSVs enriquecidos da `main` do [repo Olist](https://github.com/gustamdev/Olist-E-Commerce-Public-Dataset-2017-2018) (`OLIST_BASE_URL`, já é o padrão) para `backend/data/olist/`, e insere no Mongo. Precisa de internet nessa hora; nas próximas execuções usa o que já está salvo. O seed não roda sobre banco já populado.
 
 A API fica em `http://localhost:8000` (Swagger em `/docs`). Com `MAIL_BACKEND=console`, o código de verificação (OTP) aparece no log do backend.
 
