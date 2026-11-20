@@ -91,6 +91,11 @@ O foco do projeto é o **assistente de dados**, um agente Text-to-SQL. A loja on
 - **Frete por localização:** haversine entre o CEP do depósito e o do cliente, mais peso, offline. Consulta de CEP real opcional (BrasilAPI/ViaCEP) no servidor.
 - **LGPD:** exportação e exclusão de conta, textos legais, pseudonimização, PII mascarada no admin, auditoria e retenção. Veja [docs/lgpd-loja.md](docs/lgpd-loja.md) e [docs/seguranca-loja.md](docs/seguranca-loja.md).
 
+<p align="center">
+  <img src="docs/screenshots/loja-home.png" alt="Página inicial da loja: banner, compra por categoria e produtos mais vendidos" width="49%">
+  <img src="docs/screenshots/loja-listagem.png" alt="Listagem de produtos de uma categoria da loja, com filtros de preço, nota e disponibilidade, avaliações e preço parcelado" width="49%">
+</p>
+
 A loja é o que mantém os dados vivos: cada compra muda estoque e pedidos, e o agente enxerga a mudança no próximo snapshot do DuckDB (com debounce do serviço). Perguntas sobre os pedidos de hoje refletem o que acabou de acontecer na loja.
 
 <p align="center">
