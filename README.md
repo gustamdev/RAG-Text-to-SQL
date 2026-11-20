@@ -1,4 +1,4 @@
-# Olist Insights
+# RAG-TEXT-TO-SQL
 
 [![CI](https://github.com/gustamdev/RAG-Text-to-SQL/actions/workflows/ci.yml/badge.svg)](https://github.com/gustamdev/RAG-Text-to-SQL/actions/workflows/ci.yml)
 
