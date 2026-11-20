@@ -18,6 +18,7 @@
     "paths": {
       "@/components/ui/*": ["../frontend/src/components/ui/*"],
       "@/lib/*": ["../frontend/src/lib/*"],
+      "@/types/shop": ["../frontend/src/types/shop"],
       "@/*": ["./src/*"]
     },
 
